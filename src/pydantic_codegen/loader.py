@@ -18,7 +18,7 @@ from pydantic_codegen.ir import (
     ModuleName,
     SymbolName,
 )
-from pydantic_codegen.module_source import ModuleSource, module_source
+from pydantic_codegen.module_source import module_source
 from pydantic_codegen.rejections import (
     ComputedFieldError,
     RootModelSourceError,
@@ -62,11 +62,11 @@ def _own_fields(cls: type[BaseModel]) -> list[FieldName]:
     )
 
 
-def _field(declaring: ModuleSource, owner: ModelName, name: FieldName) -> Field:
-    declared = declaring.field_source(owner, name)
+def _field(bindings: Bindings, name: FieldName) -> Field:
+    owner = bindings.model
+    declared = bindings.module.field_source(owner, name)
     if declared is None:
         raise UndeclaredFieldError(owner, name)
-    bindings = Bindings(module=declaring, model=owner)
     return Field(
         name=name,
         annotation=declared.annotation,
@@ -76,10 +76,10 @@ def _field(declaring: ModuleSource, owner: ModelName, name: FieldName) -> Field:
     )
 
 
-def _bases(declaring: ModuleSource, owner: ModelName) -> tuple[BaseName, ...]:
-    declared = declaring.bases_of(owner)
+def _bases(bindings: Bindings) -> tuple[BaseName, ...]:
+    declared = bindings.module.bases_of(bindings.model)
     if declared is None:
-        raise UndeclaredModelError(declaring.name, owner)
+        raise UndeclaredModelError(bindings.module.name, bindings.model)
     return declared
 
 
@@ -101,15 +101,12 @@ def base_of(target: ModelTarget) -> Base:
 
 def _model(cls: type[BaseModel]) -> Model:
     module: ModuleType = inspect.getmodule(cls)  # pyrefly: ignore
-    declaring = module_source(module)
     owner = ModelName(cls.__name__)
+    bindings = Bindings(module=module_source(module), model=owner)
     # Fields before bases: an undeclared field is the more precise rejection, and
     # reading the bases of a model with no class statement is what raises otherwise.
-    fields = (
-        Arr(_own_fields(cls)).map(lambda name: _field(declaring, owner, name)).to_list()
-    )
-    bases = Arr(list(_bases(declaring, owner)))
-    bindings = Bindings(module=declaring, model=owner)
+    fields = Arr(_own_fields(cls)).map(lambda name: _field(bindings, name)).to_list()
+    bases = Arr(list(_bases(bindings)))
     return Model(
         name=owner,
         # A base kept from the source carries no fields for the gate to see: the

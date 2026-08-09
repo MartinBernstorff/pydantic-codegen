@@ -20,6 +20,7 @@ from pydantic_codegen.ir import (
     SymbolName,
 )
 from pydantic_codegen.python_source import PythonSource
+from pydantic_codegen.rejections import UnreadableExpressionError
 
 
 class FieldSource(BaseModel):
@@ -97,14 +98,23 @@ def _annotation_references(node: ast.expr) -> Arr[SymbolName]:
     )
 
 
-def free_names(source: PythonSource) -> tuple[SymbolName, ...]:
+# A string that does not parse is a string, not a forward reference; a whole
+# annotation that does not parse is source this loader cannot represent.
+def _readable(source: PythonSource) -> ast.expr:
     node = _expression(source)
-    return tuple(_referenced(node).to_list()) if node else ()
+    if node is None:
+        raise UnreadableExpressionError(source)
+    return node
+
+
+def free_names(source: PythonSource) -> tuple[SymbolName, ...]:
+    return tuple(_referenced(_readable(source)).to_list())
 
 
 def annotation_names(annotation: AnnotationText) -> tuple[SymbolName, ...]:
-    node = _expression(PythonSource(annotation.root))
-    return tuple(_annotation_references(node).to_list()) if node else ()
+    return tuple(
+        _annotation_references(_readable(PythonSource(annotation.root))).to_list()
+    )
 
 
 def _guards_type_checking(test: ast.expr) -> bool:

@@ -1,4 +1,5 @@
 from pydantic_codegen.ir import FieldName, ModelName, ModuleName, SymbolName
+from pydantic_codegen.python_source import PythonSource
 
 
 class UnrepresentableError(Exception): ...
@@ -56,3 +57,8 @@ class UndeclaredModelError(UnrepresentableError):
 class UnresolvableNameError(UnrepresentableError):
     def __init__(self, module: ModuleName, name: SymbolName) -> None:
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
+
+
+class UnreadableExpressionError(UnrepresentableError):
+    def __init__(self, source: PythonSource) -> None:
+        super().__init__(f"{source.root!r} is not an expression this loader can read")

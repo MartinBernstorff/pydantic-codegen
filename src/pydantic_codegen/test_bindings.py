@@ -15,6 +15,7 @@ from pydantic_codegen.module_source import ModuleSource
 from pydantic_codegen.python_source import PythonSource
 from pydantic_codegen.rejections import (
     TypeParameterAnnotationError,
+    UnreadableExpressionError,
     UnresolvableNameError,
 )
 
@@ -117,6 +118,11 @@ def test_imports_a_source_expression_needs(
 def test_a_type_parameter_stands_for_no_importable_name() -> None:
     with pytest.raises(TypeParameterAnnotationError, match="Example"):
         _ = _bindings(frozenset({SymbolName("Id")})).imports_for(AnnotationText("Id"))
+
+
+def test_an_expression_that_does_not_parse_is_unreadable() -> None:
+    with pytest.raises(UnreadableExpressionError):
+        _ = _bindings().imports_for(AnnotationText("list[Tag"))
 
 
 def test_a_name_the_module_neither_imports_nor_defines_is_unresolvable() -> None:
