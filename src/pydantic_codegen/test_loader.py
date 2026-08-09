@@ -14,13 +14,8 @@ from pydantic_codegen.ir import (
     ModuleName,
     SymbolName,
 )
-from pydantic_codegen.loader import (
-    MalformedTargetError,
-    ModelTarget,
-    UndeclaredFieldError,
-    UnresolvableNameError,
-    load,
-)
+from pydantic_codegen.loader import MalformedTargetError, ModelTarget, load
+from pydantic_codegen.rejections import UndeclaredFieldError, UnresolvableNameError
 from pydantic_codegen.test_corpus_asset_location import FolderId
 
 
