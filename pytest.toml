@@ -3,4 +3,11 @@ testpaths = ["src"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = ["-ra", "--strict-markers", "--strict-config", "-x", "-n", "auto"]
+strict = true
+addopts = [
+  "--report-chars=a",     # summary line per non-passing test
+  "--exitfirst",          # stop on first failure
+  "--numprocesses=auto",  # pytest-xdist: one worker per core
+  "--quiet",              # drop the platform header
+  "--tb=short",           # failing line + assertion detail
+]
