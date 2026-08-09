@@ -7,7 +7,7 @@ from pydantic_codegen.python_source import PythonSource, concatenated
 class RecipeLabel(FrozenText): ...
 
 
-def _rendered_import(statement: Import) -> PythonSource:
+def rendered_import(statement: Import) -> PythonSource:
     if statement.name is None:
         bare = f"import {statement.module.root}"
         return PythonSource(
@@ -30,7 +30,7 @@ def _rendered_field(field: Field) -> PythonSource:
 
 
 def _rendered_model(model: Model) -> PythonSource:
-    bases = Arr(model.bases).map(lambda base: base.root).to_list()
+    bases = Arr(model.bases).map(lambda base: base.name.root).to_list()
     header = PythonSource(
         f"class {model.name.root}({', '.join(bases)}):"
         if bases
@@ -69,7 +69,7 @@ def rendered(models: Arr[Model], recipe: RecipeLabel) -> PythonSource:
             PythonSource(f"# Recipe: {recipe.root}"),
         ]
     )
-    imports = imports_of(models).map(_rendered_import)
+    imports = imports_of(models).map(rendered_import)
     classes = models.map(_rendered_model)
     return concatenated(header.chain(imports).chain(classes)).followed_by(
         PythonSource("")

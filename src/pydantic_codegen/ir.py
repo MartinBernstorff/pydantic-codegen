@@ -41,6 +41,13 @@ class Import(BaseModel):
         return SymbolName(self.module.root.split(".")[0])
 
 
+class Base(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: BaseName
+    fields: tuple[FieldName, ...] = ()
+
+
 class Field(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -54,6 +61,6 @@ class Model(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: ModelName
-    bases: tuple[BaseName, ...] = ()
+    bases: tuple[Base, ...] = ()
     fields: tuple[Field, ...] = ()
     imports: tuple[Import, ...] = ()

@@ -2,6 +2,7 @@ from iterpy import Arr
 
 from pydantic_codegen.ir import (
     AnnotationText,
+    Base,
     BaseName,
     DefaultText,
     Field,
@@ -19,7 +20,7 @@ from pydantic_codegen.renderer import RecipeLabel, rendered
 def test_renders_header_imports_and_class() -> None:
     model = Model(
         name=ModelName("CreateSubfolderPayload"),
-        bases=(BaseName("FlowbasePayloadModel"),),
+        bases=(Base(name=BaseName("FlowbasePayloadModel")),),
         fields=(
             Field(
                 name=FieldName("name"),

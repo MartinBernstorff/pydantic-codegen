@@ -7,6 +7,7 @@ from pathlib import Path
 from iterpy import Arr
 from pydantic import ConfigDict, RootModel
 
+from pydantic_codegen.gates import reject_duplicate_paths, reject_unwritable
 from pydantic_codegen.ir import FrozenText, Model
 from pydantic_codegen.renderer import RecipeLabel, rendered
 
@@ -73,6 +74,9 @@ def _format(files: list[File], ruff: RuffExecutable) -> None:
 def write(files: list[File]) -> None:
     if not files:
         return
+    reject_duplicate_paths(Arr(files).map(lambda file: file.path).to_list())
+    for file in files:
+        reject_unwritable(file.path, file.models)
     ruff = _ruff()
     labelled = Arr(files).map(lambda file: (file, file.label())).to_list()
     for file, label in labelled:

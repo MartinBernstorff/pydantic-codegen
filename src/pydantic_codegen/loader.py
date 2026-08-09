@@ -11,6 +11,7 @@ from pydantic import BaseModel, RootModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
+    Base,
     BaseName,
     DefaultText,
     Field,
@@ -149,9 +150,20 @@ class ParsedModule:
         }
         return declarations | assignments
 
+    # A TYPE_CHECKING import is invisible at runtime, so the generated file must bind
+    # it for real; the same statement, hoisted, is what does that.
+    def _statements(self) -> list[ast.stmt]:
+        guarded = [
+            inner
+            for node in self.tree.body
+            if isinstance(node, ast.If)
+            for inner in node.body + node.orelse
+        ]
+        return self.tree.body + guarded
+
     def _imports(self) -> Arr[Import]:
         plain = (
-            Arr(self.tree.body)
+            Arr(self._statements())
             .filter(lambda node: isinstance(node, ast.Import))
             .map(lambda node: node.names)  # pyrefly: ignore
             .flatten()
@@ -163,7 +175,7 @@ class ParsedModule:
             )
         )
         from_module = (
-            Arr(self.tree.body)
+            Arr(self._statements())
             .filter(lambda node: isinstance(node, ast.ImportFrom) and node.level == 0)
             .map(
                 lambda node: [
@@ -232,8 +244,35 @@ def _field(parsed: ParsedModule, owner: ModelName, name: FieldName) -> Field:
     )
 
 
+def _fields_of(module: ModuleType, name: SymbolName) -> tuple[FieldName, ...]:
+    referenced = getattr(module, name.root, None)
+    if not (isinstance(referenced, type) and issubclass(referenced, BaseModel)):
+        return ()
+    return tuple(Arr(list(referenced.model_fields)).map(FieldName).to_list())
+
+
+def _base(parsed: ParsedModule, module: ModuleType, node: ast.expr) -> Base:
+    root = node.value if isinstance(node, ast.Subscript) else node
+    return Base(
+        name=BaseName(parsed.segment(node).root),
+        fields=_fields_of(module, SymbolName(root.id))
+        if isinstance(root, ast.Name)
+        else (),
+    )
+
+
+def base_of(target: ModelTarget) -> Base:
+    statement = imported(target)
+    module = importlib.import_module(statement.module.root)
+    return Base(
+        name=BaseName(statement.bound_name().root),
+        fields=_fields_of(module, statement.bound_name()),
+    )
+
+
 def _model(cls: type[BaseModel]) -> Model:
-    parsed = ParsedModule(inspect.getmodule(cls))  # pyrefly: ignore
+    module: ModuleType = inspect.getmodule(cls)  # pyrefly: ignore
+    parsed = ParsedModule(module)
     owner = ModelName(cls.__name__)
     # Fields before bases: an undeclared field is the more precise rejection, and
     # reading the bases of a model with no class statement is what raises otherwise.
@@ -245,9 +284,7 @@ def _model(cls: type[BaseModel]) -> Model:
     bases = Arr(parsed.class_bases(owner))
     return Model(
         name=owner,
-        bases=tuple(
-            bases.map(lambda base: BaseName(parsed.segment(base).root)).to_list()
-        ),
+        bases=tuple(bases.map(partial(_base, parsed, module)).to_list()),
         fields=tuple(fields),
         imports=tuple(
             bases.map(lambda base: _imports_for(base, parsed, owner))

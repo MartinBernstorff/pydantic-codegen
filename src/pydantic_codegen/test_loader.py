@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
+    Base,
     BaseName,
     Field,
     FieldName,
@@ -27,7 +28,7 @@ def test_loads_fields_bases_and_imports() -> None:
     assert loaded == [
         Model(
             name=ModelName("Subfolder"),
-            bases=(BaseName("BaseModel"),),
+            bases=(Base(name=BaseName("BaseModel")),),
             fields=(
                 Field(
                     name=FieldName("name"),
