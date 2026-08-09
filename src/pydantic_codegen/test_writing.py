@@ -3,8 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from pydantic_codegen.test_corpus_subfolder import Subfolder
 
 RECIPE = """
@@ -76,19 +74,24 @@ def test_missing_repo_root_is_an_error(tmp_path: Path) -> None:
     recipe = tmp_path / "codegen.py"
     _ = recipe.write_text(RECIPE)
 
-    with pytest.raises(subprocess.CalledProcessError):
-        _run(recipe, tmp_path)
+    failed = subprocess.run(
+        [sys.executable, str(recipe)], cwd=tmp_path, capture_output=True, check=False
+    )
+
+    assert failed.returncode != 0
+    assert b"RepoRootNotFoundError" in failed.stderr
 
 
 def test_ruff_missing_from_path_raises_instead_of_writing(tmp_path: Path) -> None:
     recipe = _recipe_repo(tmp_path)
 
-    with pytest.raises(subprocess.CalledProcessError):
-        _ = subprocess.run(
-            [sys.executable, str(recipe)],
-            cwd=tmp_path,
-            check=True,
-            env={"PATH": str(tmp_path / "empty-bin")},
-        )
+    failed = subprocess.run(
+        [sys.executable, str(recipe)],
+        cwd=tmp_path,
+        env={"PATH": str(tmp_path / "empty-bin")},
+        capture_output=True,
+        check=False,
+    )
 
+    assert b"FormatterNotFoundError" in failed.stderr
     assert not (tmp_path / "generated").exists()

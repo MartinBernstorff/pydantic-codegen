@@ -1,17 +1,18 @@
 from iterpy import Arr
-from pydantic import ConfigDict, RootModel
 
-from pydantic_codegen.ir import Field, Import, Model
+from pydantic_codegen.ir import Field, FrozenText, Import, Model
 from pydantic_codegen.python_source import PythonSource, concatenated
 
 
-class RecipeLabel(RootModel[str]):
-    model_config = ConfigDict(frozen=True)
+class RecipeLabel(FrozenText): ...
 
 
 def _rendered_import(statement: Import) -> PythonSource:
     if statement.name is None:
-        return PythonSource(f"import {statement.module.root}")
+        bare = f"import {statement.module.root}"
+        return PythonSource(
+            bare if statement.alias is None else f"{bare} as {statement.alias.root}"
+        )
     if statement.alias is None:
         return PythonSource(
             f"from {statement.module.root} import {statement.name.root}"

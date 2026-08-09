@@ -5,7 +5,7 @@ import inspect
 from types import ModuleType
 
 from iterpy import Arr
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
@@ -13,6 +13,7 @@ from pydantic_codegen.ir import (
     DefaultText,
     Field,
     FieldName,
+    FrozenText,
     Import,
     Model,
     ModelName,
@@ -22,8 +23,12 @@ from pydantic_codegen.ir import (
 from pydantic_codegen.python_source import PythonSource
 
 
-class ModelTarget(RootModel[str]):
-    model_config = ConfigDict(frozen=True)
+class ModelTarget(FrozenText): ...
+
+
+class MalformedTargetError(Exception):
+    def __init__(self, target: ModelTarget) -> None:
+        super().__init__(f"{target.root} is not of the form 'module:Class'")
 
 
 class UnrepresentableError(Exception): ...
@@ -31,9 +36,12 @@ class UnrepresentableError(Exception): ...
 
 class UndeclaredFieldError(UnrepresentableError):
     def __init__(self, model: ModelName, field: FieldName) -> None:
-        super().__init__(
-            f"{model.root}.{field.root} is declared by no class in the MRO"
-        )
+        super().__init__(f"{model.root} does not declare {field.root} itself")
+
+
+class UnresolvableNameError(UnrepresentableError):
+    def __init__(self, module: ModuleName, name: SymbolName) -> None:
+        super().__init__(f"{module.root} neither imports nor defines {name.root}")
 
 
 class ParsedModule:
@@ -52,17 +60,30 @@ class ParsedModule:
             if isinstance(node, ast.ClassDef) and node.name == name.root
         )
 
-    def import_of(self, name: SymbolName) -> Import | None:
+    def import_of(self, name: SymbolName) -> Import:
         bound = {
             statement.bound_name(): statement for statement in self._imports().to_list()
         }
         if name in bound:
             return bound[name]
-        defined_here = any(
-            isinstance(node, ast.ClassDef | ast.FunctionDef) and node.name == name.root
+        if name in self._defined_names():
+            return Import(module=self.name, name=name)
+        raise UnresolvableNameError(self.name, name)
+
+    def _defined_names(self) -> set[SymbolName]:
+        declarations = {
+            SymbolName(node.name)
             for node in self.tree.body
-        )
-        return Import(module=self.name, name=name) if defined_here else None
+            if isinstance(node, ast.ClassDef | ast.FunctionDef)
+        }
+        assignments = {
+            SymbolName(target.id)
+            for node in self.tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        return declarations | assignments
 
     def _imports(self) -> Arr[Import]:
         plain = (
@@ -106,40 +127,29 @@ def _free_names(node: ast.expr) -> Arr[SymbolName]:
 
 
 def _imports_for(node: ast.expr, parsed: ParsedModule) -> tuple[Import, ...]:
-    resolved = _free_names(node).map(parsed.import_of).to_list()
-    return tuple(statement for statement in resolved if statement is not None)
-
-
-def _declaring_class(cls: type[BaseModel], name: FieldName) -> type:
-    declaring = next(
-        (
-            ancestor
-            for ancestor in cls.__mro__
-            if name.root in inspect.get_annotations(ancestor)
-        ),
-        None,
-    )
-    if declaring is None:
-        raise UndeclaredFieldError(ModelName(cls.__name__), name)
-    return declaring
+    return tuple(_free_names(node).map(parsed.import_of).to_list())
 
 
 def _annotated_assign(
     parsed: ParsedModule, owner: ModelName, name: FieldName
 ) -> ast.AnnAssign:
-    return next(
-        node
-        for node in parsed.class_def(owner).body
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and node.target.id == name.root
+    assign = next(
+        (
+            node
+            for node in parsed.class_def(owner).body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name.root
+        ),
+        None,
     )
+    if assign is None:
+        raise UndeclaredFieldError(owner, name)
+    return assign
 
 
-def _field(cls: type[BaseModel], name: FieldName) -> Field:
-    declaring = _declaring_class(cls, name)
-    parsed = ParsedModule(inspect.getmodule(declaring))  # pyrefly: ignore
-    assign = _annotated_assign(parsed, ModelName(declaring.__name__), name)
+def _field(parsed: ParsedModule, owner: ModelName, name: FieldName) -> Field:
+    assign = _annotated_assign(parsed, owner, name)
     assigned = assign.value
     return Field(
         name=name,
@@ -152,16 +162,16 @@ def _field(cls: type[BaseModel], name: FieldName) -> Field:
 
 def _model(cls: type[BaseModel]) -> Model:
     parsed = ParsedModule(inspect.getmodule(cls))  # pyrefly: ignore
-    definition = parsed.class_def(ModelName(cls.__name__))
-    bases = Arr(definition.bases)
+    owner = ModelName(cls.__name__)
+    bases = Arr(parsed.class_def(owner).bases)
     return Model(
-        name=ModelName(cls.__name__),
+        name=owner,
         bases=tuple(
             bases.map(lambda base: BaseName(parsed.segment(base).root)).to_list()
         ),
         fields=tuple(
             Arr(list(cls.model_fields))
-            .map(lambda name: _field(cls, FieldName(name)))
+            .map(lambda name: _field(parsed, owner, FieldName(name)))
             .to_list()
         ),
         imports=tuple(
@@ -171,6 +181,8 @@ def _model(cls: type[BaseModel]) -> Model:
 
 
 def load(target: ModelTarget) -> Arr[Model]:
-    module_name, _, class_name = target.root.partition(":")
+    module_name, separator, class_name = target.root.partition(":")
+    if not separator:
+        raise MalformedTargetError(target)
     module = importlib.import_module(module_name)
     return Arr([_model(getattr(module, class_name))])
