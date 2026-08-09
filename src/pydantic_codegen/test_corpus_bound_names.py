@@ -1,0 +1,13 @@
+from pydantic import BaseModel, Field
+
+from pydantic_codegen.test_corpus_tagging import Tag
+
+
+class Sorted(BaseModel):
+    tags: list[Tag] = Field(
+        default_factory=lambda: sorted([Tag("b"), Tag("a")], key=lambda tag: tag.root)
+    )
+
+
+class Comprehended(BaseModel):
+    tags: list[Tag] = Field(default_factory=lambda: [Tag(word) for word in ("new",)])

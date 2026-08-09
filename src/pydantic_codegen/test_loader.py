@@ -1,5 +1,6 @@
 import pytest
 from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
 from pydantic_codegen.ir import (
     AnnotationText,
@@ -15,11 +16,12 @@ from pydantic_codegen.ir import (
 from pydantic_codegen.loader import (
     MalformedTargetError,
     ModelTarget,
+    UnboundTypeParameterError,
     UndeclaredFieldError,
     UnresolvableNameError,
     load,
 )
-from pydantic_codegen.test_corpus_subfolder import Subfolder
+from pydantic_codegen.test_corpus_asset_location import FolderId
 
 
 def test_loads_fields_bases_and_imports() -> None:
@@ -60,8 +62,52 @@ def test_loads_fields_bases_and_imports() -> None:
     ]
 
 
-class Inherited(Subfolder):
-    pass
+def test_a_relative_import_is_absolute_in_the_ir() -> None:
+    loaded = load(ModelTarget("pydantic_codegen.test_corpus_inheriting:Record"))
+
+    assert loaded.to_list()[0].imports == (
+        Import(
+            module=ModuleName("pydantic_codegen.test_corpus_stamping"),
+            name=SymbolName("Stamped"),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "field"),
+    [
+        (
+            ModelTarget("pydantic_codegen.test_corpus_bound_names:Sorted"),
+            FieldName("tags"),
+        ),
+        (
+            ModelTarget("pydantic_codegen.test_corpus_bound_names:Comprehended"),
+            FieldName("tags"),
+        ),
+    ],
+)
+def test_a_name_bound_inside_the_expression_needs_no_import(
+    target: ModelTarget, field: FieldName
+) -> None:
+    loaded = load(target)
+
+    imported = {
+        statement.bound_name()
+        for declared in loaded.to_list()[0].fields
+        if declared.name == field
+        for statement in declared.imports
+    }
+    assert imported <= {SymbolName("Field"), SymbolName("Tag")}
+
+
+def _injecting_a_field(model: type[BaseModel]) -> type[BaseModel]:
+    model.model_fields["ghost"] = FieldInfo(annotation=int)
+    return model
+
+
+@_injecting_a_field
+class Injected(BaseModel):
+    known: FolderId
 
 
 # Hidden from a top-level scan of the module's imports, but bound at runtime.
@@ -75,9 +121,14 @@ class Conditionally(BaseModel):
     hidden: Conditional
 
 
-def test_a_field_the_model_does_not_declare_itself_is_unrepresentable() -> None:
-    with pytest.raises(UndeclaredFieldError):
-        _ = load(ModelTarget("pydantic_codegen.test_loader:Inherited"))
+def test_a_field_no_class_in_the_mro_declares_is_unrepresentable() -> None:
+    with pytest.raises(UndeclaredFieldError, match="ghost"):
+        _ = load(ModelTarget("pydantic_codegen.test_loader:Injected"))
+
+
+def test_an_unbound_type_parameter_is_unrepresentable() -> None:
+    with pytest.raises(UnboundTypeParameterError):
+        _ = load(ModelTarget("pydantic_codegen.test_corpus_generic:Identified"))
 
 
 def test_a_name_the_module_neither_imports_nor_defines_is_unrepresentable() -> None:
