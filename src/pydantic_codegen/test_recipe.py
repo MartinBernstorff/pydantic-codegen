@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from pydantic_codegen.ir import ModuleName, SymbolName
 from pydantic_codegen.python_source import PythonSource
-from pydantic_codegen.test_corpus_builder import SourceModule, corpus
+from pydantic_codegen.test_corpus_builder import SourceModule, corpus, executed
 
 RECIPE = """
 from pydantic_codegen import (
@@ -71,21 +71,13 @@ class PatchPayloadModel(BaseModel): ...
 )
 
 
-def _executed(source: PythonSource) -> ModuleType:
-    module = ModuleType("generated_payloads")
-    sys.modules[module.__name__] = module
-    exec(source.root, module.__dict__)
-    return module
-
-
 def _model(module: ModuleType, name: SymbolName) -> type[BaseModel]:
     generated: type[BaseModel] = getattr(module, name.root)
     return generated
 
 
-# The only test that runs a recipe as a recipe: a real repository, a real interpreter,
-# and a working directory that is not the recipe's own, so the output path is proven to
-# follow the recipe file rather than wherever it was invoked from.
+# Run from a working directory that is not the recipe's own, so the output path is
+# proven to follow the recipe file rather than wherever it was invoked from.
 def test_a_recipe_writes_payloads_that_behave_like_the_source(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _ = (tmp_path / "codegen.py").write_text(RECIPE)
@@ -102,13 +94,13 @@ def test_a_recipe_writes_payloads_that_behave_like_the_source(tmp_path: Path) ->
             },
             check=True,
         )
-        written = _executed(
-            PythonSource((tmp_path / "generated" / "payloads.py").read_text())
-        )
+        payloads = PythonSource((tmp_path / "generated" / "payloads.py").read_text())
 
-        assert set(
-            _model(written, SymbolName("CreateSubfolderPayload")).model_fields
-        ) == {"name"}
-        assert (
-            _model(written, SymbolName("UpdateSubfolderPayload"))().model_dump() == {}
-        )
+        with executed(payloads, ModuleName("generated_payloads")) as written:
+            assert set(
+                _model(written, SymbolName("CreateSubfolderPayload")).model_fields
+            ) == {"name"}
+            assert (
+                _model(written, SymbolName("UpdateSubfolderPayload"))().model_dump()
+                == {}
+            )

@@ -3,6 +3,7 @@ import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
 
 from pydantic import BaseModel, ConfigDict
 
@@ -18,28 +19,64 @@ class SourceModule(BaseModel):
     source: PythonSource
 
 
-# Names stay deterministic so they read back in the generated imports, which means
-# two tests can declare the same one; unbinding on exit is what keeps them apart
-# under pytest-randomly.
+def _written(root: Path, module: SourceModule) -> None:
+    *packages, leaf = module.name.root.split(".")
+    directory = root
+    for package in packages:
+        directory = directory / package
+        directory.mkdir(exist_ok=True)
+        (directory / "__init__.py").touch()
+    _ = (directory / f"{leaf}.py").write_text(module.source.root)
+
+
+# A package binds a name too, so `packaged.inheriting` also leaves `packaged` behind.
+def _bindings(modules: list[SourceModule]) -> set[ModuleName]:
+    return {
+        ModuleName(".".join(parts[: depth + 1]))
+        for module in modules
+        for parts in [module.name.root.split(".")]
+        for depth in range(len(parts))
+    }
+
+
+# Names stay deterministic so they read back in the generated imports, which means two
+# tests can declare the same one; restoring what was bound before is what keeps them
+# apart under pytest-randomly.
 @contextmanager
 def corpus(root: Path, modules: list[SourceModule]) -> Generator[None, None, None]:
     root.mkdir(parents=True, exist_ok=True)
     for module in modules:
-        *packages, leaf = module.name.root.split(".")
-        directory = root.joinpath(*packages)
-        directory.mkdir(parents=True, exist_ok=True)
-        for depth in range(len(packages)):
-            (root.joinpath(*packages[: depth + 1]) / "__init__.py").touch()
-        _ = (directory / f"{leaf}.py").write_text(module.source.root)
+        _written(root, module)
+    bindings = _bindings(modules)
+    shadowed = {
+        name.root: sys.modules[name.root]
+        for name in bindings
+        if name.root in sys.modules
+    }
     sys.path.insert(0, str(root))
     importlib.invalidate_caches()
     try:
         yield
     finally:
         sys.path.remove(str(root))
-        bound = {module.name.root for module in modules}
-        for name in bound | {name.split(".")[0] for name in bound}:
-            _ = sys.modules.pop(name, None)
+        for name in bindings:
+            _ = sys.modules.pop(name.root, None)
+        sys.modules.update(shadowed)
+
+
+@contextmanager
+def executed(
+    source: PythonSource, name: ModuleName
+) -> Generator[ModuleType, None, None]:
+    module = ModuleType(name.root)
+    # Pydantic resolves a forward ref through sys.modules, so a module that is not
+    # registered leaves `note: "Tag | None"` an unevaluated ForwardRef.
+    sys.modules[name.root] = module
+    try:
+        exec(source.root, module.__dict__)
+        yield module
+    finally:
+        _ = sys.modules.pop(name.root, None)
 
 
 TAGGING = SourceModule(

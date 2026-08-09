@@ -1,7 +1,5 @@
 import importlib
-import sys
 from pathlib import Path
-from types import ModuleType
 
 from pydantic import BaseModel, ConfigDict, RootModel
 
@@ -9,7 +7,7 @@ from pydantic_codegen.ir import ModuleName
 from pydantic_codegen.loader import ModelTarget, imported, load
 from pydantic_codegen.python_source import PythonSource
 from pydantic_codegen.renderer import RecipeLabel
-from pydantic_codegen.test_corpus_builder import SourceModule, corpus
+from pydantic_codegen.test_corpus_builder import SourceModule, corpus, executed
 from pydantic_codegen.writing import File, generated
 
 RECIPE = RecipeLabel("/codegen.py")
@@ -227,17 +225,6 @@ def _shape(model: type[BaseModel]) -> ModelShape:
     )
 
 
-def _executed(source: PythonSource, target: ModelTarget) -> type[BaseModel]:
-    name = imported(target).bound_name().root
-    module = ModuleType(f"generated_{name}")
-    # Pydantic resolves a forward ref through sys.modules, so a module that is not
-    # registered leaves `note: "Tag | None"` an unevaluated ForwardRef.
-    sys.modules[module.__name__] = module
-    exec(source.root, module.__dict__)
-    model: type[BaseModel] = getattr(module, name)
-    return model
-
-
 def _source_model(target: ModelTarget) -> type[BaseModel]:
     statement = imported(target)
     module = importlib.import_module(statement.module.root)
@@ -249,11 +236,14 @@ def _round_trip(root: Path, target: ModelTarget) -> RoundTrip:
     source = generated([File(str(root / "generated.py"), load(target.root))], RECIPE)[
         0
     ].source
-    return RoundTrip(
-        body=PythonSource(source.root.split("\n", 2)[2]),
-        generated=_shape(_executed(source, target)),
-        source=_shape(_source_model(target)),
-    )
+    bound = imported(target).bound_name()
+    with executed(source, ModuleName(f"generated_{bound.root}")) as module:
+        generated_model: type[BaseModel] = getattr(module, bound.root)
+        return RoundTrip(
+            body=PythonSource(source.root.split("\n", 2)[2]),
+            generated=_shape(generated_model),
+            source=_shape(_source_model(target)),
+        )
 
 
 def test_the_header_credits_the_recipe_that_generated_the_file(tmp_path: Path) -> None:

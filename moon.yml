@@ -22,6 +22,8 @@ tasks:
       - '@group(sources)'
       - '@group(manifests)'
       - 'pytest.toml'
+      # The suite formats through ruff, so its config decides what the output looks like.
+      - 'ruff.toml'
 
   typecheck:
     script: 'uv run pyrefly check src'

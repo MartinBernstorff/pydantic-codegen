@@ -23,6 +23,10 @@ class RecipeFile(RootModel[Path]):
     model_config = ConfigDict(frozen=True)
 
 
+class RuffPass(RootModel[tuple[str, ...]]):
+    model_config = ConfigDict(frozen=True)
+
+
 class RepoRootNotFoundError(Exception):
     def __init__(self, recipe: RecipeFile) -> None:
         super().__init__(f"no .git directory found above {recipe.root}")
@@ -64,12 +68,12 @@ def _ruff() -> RuffExecutable:
 
 
 def _piped(
-    ruff: RuffExecutable, arguments: list[str], path: Path, source: PythonSource
+    ruff: RuffExecutable, ruff_pass: RuffPass, path: Path, source: PythonSource
 ) -> PythonSource:
     # --stdin-filename is what ruff resolves config from, so the destination decides
     # which config the output is formatted with, not the working directory.
     finished = subprocess.run(
-        [str(ruff.root), *arguments, "--stdin-filename", str(path), "-"],
+        [str(ruff.root), *ruff_pass.root, "--stdin-filename", str(path), "-"],
         input=source.root,
         capture_output=True,
         text=True,
@@ -81,9 +85,9 @@ def _piped(
 def _formatted(path: Path, source: PythonSource, ruff: RuffExecutable) -> PythonSource:
     # --exit-zero: a diagnostic ruff cannot fix is not this library's failure.
     sorted_imports = _piped(
-        ruff, ["check", "--select", "I", "--fix", "--exit-zero"], path, source
+        ruff, RuffPass(("check", "--select", "I", "--fix", "--exit-zero")), path, source
     )
-    return _piped(ruff, ["format"], path, sorted_imports)
+    return _piped(ruff, RuffPass(("format",)), path, sorted_imports)
 
 
 def generated(files: list[File], label: RecipeLabel) -> list[GeneratedFile]:
