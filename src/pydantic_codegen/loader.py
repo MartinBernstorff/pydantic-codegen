@@ -1,13 +1,15 @@
 import ast
 import builtins
 import importlib
+import importlib.util
 import inspect
-from functools import partial
+import re
+from functools import cache, reduce
 from types import ModuleType
 from typing import TypeVar
 
 from iterpy import Arr
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
@@ -74,7 +76,7 @@ class ComputedFieldError(UnrepresentableError):
 
 class UndeclaredFieldError(UnrepresentableError):
     def __init__(self, model: ModelName, field: FieldName) -> None:
-        super().__init__(f"{model.root} does not declare {field.root} itself")
+        super().__init__(f"no class in the MRO of {model.root} declares {field.root}")
 
 
 class UndeclaredModelError(UnrepresentableError):
@@ -90,9 +92,18 @@ class UnresolvableNameError(UnrepresentableError):
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
 
 
+class UnnameableArgumentError(UnrepresentableError):
+    def __init__(self, model: ModelName, name: SymbolName) -> None:
+        super().__init__(
+            f"{model.root} binds a type parameter to {name.root}, which "
+            "substitution can only write as a bare name"
+        )
+
+
 class ParsedModule:
     def __init__(self, module: ModuleType) -> None:
         self.name = ModuleName(module.__name__)
+        self.package = ModuleName(module.__package__ or "")
         self.source = PythonSource(inspect.getsource(module))
         self.tree = ast.parse(self.source.root)
         self.type_parameters = {
@@ -149,6 +160,12 @@ class ParsedModule:
         }
         return declarations | assignments
 
+    def _absolute(self, node: ast.ImportFrom) -> ModuleName:
+        written = f"{'.' * node.level}{node.module or ''}"
+        if node.level == 0:
+            return ModuleName(written)
+        return ModuleName(importlib.util.resolve_name(written, self.package.root))
+
     def _imports(self) -> Arr[Import]:
         plain = (
             Arr(self.tree.body)
@@ -164,11 +181,11 @@ class ParsedModule:
         )
         from_module = (
             Arr(self.tree.body)
-            .filter(lambda node: isinstance(node, ast.ImportFrom) and node.level == 0)
+            .filter(lambda node: isinstance(node, ast.ImportFrom))
             .map(
                 lambda node: [
                     Import(
-                        module=ModuleName(node.module or ""),  # pyrefly: ignore
+                        module=self._absolute(node),  # pyrefly: ignore
                         name=SymbolName(alias.name),
                         alias=SymbolName(alias.asname) if alias.asname else None,
                     )
@@ -180,26 +197,192 @@ class ParsedModule:
         return plain.chain(from_module)
 
 
-def _free_names(node: ast.expr) -> Arr[SymbolName]:
+class NameSource:
+    def __init__(
+        self,
+        *,
+        declaring: ParsedModule,
+        loaded: ParsedModule,
+        model: ModelName,
+        substituted: frozenset[SymbolName] = frozenset(),
+        unbound: frozenset[SymbolName] = frozenset(),
+    ) -> None:
+        self.declaring = declaring
+        self.loaded = loaded
+        self.model = model
+        self.substituted = substituted
+        self.unbound = unbound
+
+    def import_of(self, name: SymbolName) -> Import:
+        if name in self.unbound or name in self.declaring.type_parameters:
+            raise TypeParameterAnnotationError(self.model, name)
+        if name in self.substituted:
+            return self.loaded.import_of(name)
+        return self.declaring.import_of(name)
+
+
+def _bound_names(node: ast.expr) -> set[SymbolName]:
+    inner = list(ast.walk(node))
+    arguments = {
+        SymbolName(argument.arg)
+        for lambda_ in inner
+        if isinstance(lambda_, ast.Lambda)
+        for argument in [
+            *lambda_.args.posonlyargs,
+            *lambda_.args.args,
+            *lambda_.args.kwonlyargs,
+            *([lambda_.args.vararg] if lambda_.args.vararg else []),
+            *([lambda_.args.kwarg] if lambda_.args.kwarg else []),
+        ]
+    }
+    targets = {
+        SymbolName(name.id)
+        for generator in inner
+        if isinstance(generator, ast.comprehension)
+        for name in ast.walk(generator.target)
+        if isinstance(name, ast.Name)
+    }
+    return arguments | targets
+
+
+def _plain_names(node: ast.expr) -> Arr[SymbolName]:
+    bound = _bound_names(node)
     return (
         Arr(list(ast.walk(node)))
         .filter(lambda inner: isinstance(inner, ast.Name))
         .map(lambda inner: SymbolName(inner.id))  # pyrefly: ignore
         .filter(lambda name: not hasattr(builtins, name.root))
+        .filter(lambda name: name not in bound)
         .unique()
     )
 
 
-def _resolve(parsed: ParsedModule, owner: ModelName, name: SymbolName) -> Import:
-    if name in parsed.type_parameters:
-        raise TypeParameterAnnotationError(owner, name)
-    return parsed.import_of(name)
+def _parsed_expression(source: PythonSource) -> ast.expr | None:
+    try:
+        return ast.parse(source.root, mode="eval").body
+    except SyntaxError:
+        return None
 
 
-def _imports_for(
-    node: ast.expr, parsed: ParsedModule, owner: ModelName
-) -> tuple[Import, ...]:
-    return tuple(_free_names(node).map(partial(_resolve, parsed, owner)).to_list())
+def _forward_refs(node: ast.expr) -> list[ast.expr]:
+    # A string inside a call is metadata — Field(description="…") — never a forward ref.
+    if isinstance(node, ast.Call):
+        return []
+    if isinstance(node, ast.Constant):
+        if not isinstance(node.value, str):
+            return []
+        parsed = _parsed_expression(PythonSource(node.value))
+        return [parsed] if parsed else []
+    return [
+        reference
+        for child in ast.iter_child_nodes(node)
+        if isinstance(child, ast.expr)
+        for reference in _forward_refs(child)
+    ]
+
+
+def _annotation_names(node: ast.expr) -> Arr[SymbolName]:
+    return (
+        _plain_names(node)
+        .chain(Arr(_forward_refs(node)).map(_annotation_names).flatten())
+        .unique()
+    )
+
+
+class Substitution(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    parameter: SymbolName
+    argument: SymbolName
+
+
+def _applied(text: PythonSource, substitution: Substitution) -> PythonSource:
+    return PythonSource(
+        re.sub(
+            rf"\b{re.escape(substitution.parameter.root)}\b",
+            substitution.argument.root,
+            text.root,
+        )
+    )
+
+
+def _substituted(text: PythonSource, pairs: Arr[Substitution]) -> PythonSource:
+    return reduce(_applied, pairs.to_list(), text)
+
+
+def _models_in_mro(cls: type[BaseModel]) -> list[type[BaseModel]]:
+    return [
+        entry
+        for entry in cls.__mro__
+        if isinstance(entry, type)
+        and issubclass(entry, BaseModel)
+        # BaseModel itself declares the attribute but does not carry it.
+        and hasattr(entry, "__pydantic_generic_metadata__")
+    ]
+
+
+def _argument_name(model: ModelName, argument: type) -> SymbolName:
+    if not isinstance(argument, type):
+        raise UnnameableArgumentError(model, SymbolName(str(argument)))
+    return SymbolName(argument.__name__)
+
+
+def _parametrised(model: ModelName, entry: type[BaseModel]) -> Arr[Substitution]:
+    metadata = entry.__pydantic_generic_metadata__
+    origin = metadata["origin"]
+    if origin is None:
+        return Arr([])
+    return Arr(
+        [
+            Substitution(
+                parameter=SymbolName(parameter.__name__),
+                argument=_argument_name(model, argument),
+            )
+            for parameter, argument in zip(
+                origin.__pydantic_generic_metadata__["parameters"],
+                metadata["args"],
+                strict=False,
+            )
+        ]
+    )
+
+
+def _substitutions(cls: type[BaseModel]) -> Arr[Substitution]:
+    model = ModelName(cls.__name__)
+    return (
+        Arr(_models_in_mro(cls))
+        .map(lambda entry: _parametrised(model, entry))
+        .flatten()
+    )
+
+
+def _parameters(cls: type[BaseModel]) -> set[SymbolName]:
+    return {
+        SymbolName(parameter.__name__)
+        for entry in _models_in_mro(cls)
+        for parameter in entry.__pydantic_generic_metadata__["parameters"]
+    }
+
+
+def _declaring_class(cls: type[BaseModel], name: FieldName) -> type:
+    found = next(
+        (
+            entry
+            for entry in cls.__mro__
+            # Membership only, never a value: `inspect.get_annotations` would evaluate
+            # them, which `from __future__ import annotations` makes unsafe.
+            if name.root in entry.__dict__.get("__annotations__", {})  # noqa: RUF063
+        ),
+        None,
+    )
+    if found is None:
+        raise UndeclaredFieldError(ModelName(cls.__name__), name)
+    return found
+
+
+@cache
+def _parsed_module(module: ModuleType) -> ParsedModule:
+    return ParsedModule(module)
 
 
 def _annotated_assign(
@@ -220,37 +403,56 @@ def _annotated_assign(
     return assign
 
 
-def _field(parsed: ParsedModule, owner: ModelName, name: FieldName) -> Field:
-    assign = _annotated_assign(parsed, owner, name)
+def _imports_for(names: Arr[SymbolName], source: NameSource) -> tuple[Import, ...]:
+    return tuple(names.map(source.import_of).to_list())
+
+
+def _field(cls: type[BaseModel], name: FieldName) -> Field:
+    declaring_class = _declaring_class(cls, name)
+    declaring = _parsed_module(inspect.getmodule(declaring_class))
+    assign = _annotated_assign(declaring, ModelName(declaring_class.__name__), name)
+    pairs = _substitutions(cls)
+    source = NameSource(
+        declaring=declaring,
+        loaded=_parsed_module(inspect.getmodule(cls)),
+        model=ModelName(cls.__name__),
+        substituted=frozenset(pairs.map(lambda pair: pair.argument).to_list()),
+        unbound=frozenset(
+            _parameters(cls) - set(pairs.map(lambda pair: pair.parameter))
+        ),
+    )
+    annotation = _substituted(declaring.segment(assign.annotation), pairs)
+    parsed = _parsed_expression(annotation)
     assigned = assign.value
     return Field(
         name=name,
-        annotation=AnnotationText(parsed.segment(assign.annotation).root),
-        default=DefaultText(parsed.segment(assigned).root) if assigned else None,
-        imports=_imports_for(assign.annotation, parsed, owner)
-        + (_imports_for(assigned, parsed, owner) if assigned else ()),
+        annotation=AnnotationText(annotation.root),
+        default=DefaultText(declaring.segment(assigned).root) if assigned else None,
+        imports=_imports_for(_annotation_names(parsed), source)  # pyrefly: ignore
+        + (_imports_for(_plain_names(assigned), source) if assigned else ()),
     )
 
 
 def _model(cls: type[BaseModel]) -> Model:
-    parsed = ParsedModule(inspect.getmodule(cls))  # pyrefly: ignore
+    loaded = _parsed_module(inspect.getmodule(cls))
     owner = ModelName(cls.__name__)
     # Fields before bases: an undeclared field is the more precise rejection, and
     # reading the bases of a model with no class statement is what raises otherwise.
     fields = (
         Arr(list(cls.model_fields))
-        .map(lambda name: _field(parsed, owner, FieldName(name)))
+        .map(lambda name: _field(cls, FieldName(name)))
         .to_list()
     )
-    bases = Arr(parsed.class_bases(owner))
+    bases = Arr(loaded.class_bases(owner))
+    source = NameSource(declaring=loaded, loaded=loaded, model=owner)
     return Model(
         name=owner,
         bases=tuple(
-            bases.map(lambda base: BaseName(parsed.segment(base).root)).to_list()
+            bases.map(lambda base: BaseName(loaded.segment(base).root)).to_list()
         ),
         fields=tuple(fields),
         imports=tuple(
-            bases.map(lambda base: _imports_for(base, parsed, owner))
+            bases.map(lambda base: _imports_for(_plain_names(base), source))
             .flatten()
             .to_list()
         ),

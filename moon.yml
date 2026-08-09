@@ -26,6 +26,11 @@ tasks:
       - '@group(manifests)'
       - 'pytest.toml'
 
+  goldens:
+    script: 'UPDATE_GOLDENS=1 uv run pytest src/pydantic_codegen/test_corpus.py'
+    options:
+      runInCI: false
+
   typecheck:
     script: 'uv run pyrefly check src'
     inputs:
@@ -75,6 +80,7 @@ tasks:
 
   noprim:
     script: 'uv run noprim check .'
+
     inputs:
       - '@group(sources)'
       - '@group(manifests)'
