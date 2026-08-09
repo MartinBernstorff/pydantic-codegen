@@ -15,7 +15,7 @@ from pydantic_codegen.ir import (
     ModuleName,
     SymbolName,
 )
-from pydantic_codegen.loader import ModelTarget, base_of, imports_of
+from pydantic_codegen.loader import ModelTarget, parsed_target
 
 Transformer = Callable[[list[Model]], list[Model]]
 
@@ -136,9 +136,11 @@ def partial_none() -> Transformer:
 
 
 def set_bases(*targets: str) -> Transformer:
-    parsed = Arr(targets).map(ModelTarget).to_list()
-    statements = tuple(Arr(parsed).map(imports_of).flatten().to_list())
-    bases = tuple(Arr(parsed).map(base_of).to_list())
+    parsed = Arr(targets).map(ModelTarget).map(parsed_target).to_list()
+    statements = tuple(
+        Arr(parsed).map(lambda target: target.imports()).flatten().to_list()
+    )
+    bases = tuple(Arr(parsed).map(lambda target: target.base()).to_list())
     return each(
         lambda model: [model.model_copy(update={"bases": bases, "imports": statements})]
     )

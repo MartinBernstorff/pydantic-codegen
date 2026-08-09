@@ -25,6 +25,7 @@ from pydantic_codegen.rejections import (
     UndeclaredFieldError,
     UndeclaredModelError,
     UnparametrisedModelError,
+    UnresolvableNameError,
     ValidatorError,
 )
 
@@ -40,28 +41,26 @@ class MalformedTargetError(Exception):
         )
 
 
-class _Parsed(BaseModel):
+class ParsedTarget(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     origin: Import
-    arguments: tuple["_Parsed", ...] = ()
+    arguments: tuple[Import, ...] = ()
 
-    def written(self) -> BaseName:
-        if not self.arguments:
-            return BaseName(self.origin.bound_name().root)
-        inside = ", ".join(
-            Arr(self.arguments).map(lambda argument: argument.written().root).to_list()
-        )
-        return BaseName(f"{self.origin.bound_name().root}[{inside}]")
+    def base(self) -> Base:
+        written = self.origin.bound_name().root
+        if self.arguments:
+            inside = ", ".join(
+                Arr(self.arguments)
+                .map(_resolved_name)
+                .map(lambda name: name.root)
+                .to_list()
+            )
+            written = f"{written}[{inside}]"
+        return Base(name=BaseName(written), fields=_fields_of(self.origin))
 
-    def statements(self) -> tuple[Import, ...]:
-        return (
-            self.origin,
-            *Arr(self.arguments)
-            .map(lambda argument: argument.statements())
-            .flatten()
-            .to_list(),
-        )
+    def imports(self) -> tuple[Import, ...]:
+        return (self.origin, *self.arguments)
 
 
 def _declaring_class(cls: type[BaseModel], name: FieldName) -> type:
@@ -110,24 +109,20 @@ def _bases(bindings: Bindings) -> tuple[BaseName, ...]:
     return declared
 
 
-def _fields_of(module: ModuleType, name: SymbolName) -> tuple[FieldName, ...]:
-    referenced = getattr(module, name.root, None)
+def _resolved_name(statement: Import) -> SymbolName:
+    module = importlib.import_module(statement.module.root)
+    name = statement.bound_name()
+    if not hasattr(module, name.root):
+        raise UnresolvableNameError(statement.module, name)
+    return name
+
+
+def _fields_of(statement: Import) -> tuple[FieldName, ...]:
+    module = importlib.import_module(statement.module.root)
+    referenced = getattr(module, _resolved_name(statement).root, None)
     if not (isinstance(referenced, type) and issubclass(referenced, BaseModel)):
         return ()
     return tuple(Arr(list(referenced.model_fields)).map(FieldName).to_list())
-
-
-def base_of(target: ModelTarget) -> Base:
-    parsed = _parsed(target)
-    module = importlib.import_module(parsed.origin.module.root)
-    return Base(
-        name=parsed.written(),
-        fields=_fields_of(module, parsed.origin.bound_name()),
-    )
-
-
-def imports_of(target: ModelTarget) -> tuple[Import, ...]:
-    return _parsed(target).statements()
 
 
 def _model(cls: type[BaseModel]) -> Model:
@@ -156,28 +151,20 @@ def imported(target: ModelTarget) -> Import:
     return Import(module=ModuleName(module_name), name=SymbolName(class_name))
 
 
-def _terms(inside: str) -> list[str]:
-    terms = [""]
-    depth = 0
-    for character in inside:
-        if character == "," and depth == 0:
-            terms.append("")
-            continue
-        depth += {"[": 1, "]": -1}.get(character, 0)
-        terms[-1] += character
-    return [term.strip() for term in terms]
-
-
-def _parsed(target: ModelTarget) -> _Parsed:
+def parsed_target(target: ModelTarget) -> ParsedTarget:
     head, bracket, inside = target.root.partition("[")
     if not bracket:
-        return _Parsed(origin=imported(target))
+        return ParsedTarget(origin=imported(target))
     if not inside.endswith("]"):
         raise MalformedTargetError(target)
-    return _Parsed(
+    return ParsedTarget(
         origin=imported(ModelTarget(head)),
         arguments=tuple(
-            Arr(_terms(inside[:-1])).map(ModelTarget).map(_parsed).to_list()
+            Arr(inside[:-1].split(","))
+            .map(str.strip)
+            .map(ModelTarget)
+            .map(imported)
+            .to_list()
         ),
     )
 

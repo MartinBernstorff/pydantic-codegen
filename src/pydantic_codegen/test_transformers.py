@@ -14,6 +14,7 @@ from pydantic_codegen.ir import (
     SymbolName,
 )
 from pydantic_codegen.loader import MalformedTargetError
+from pydantic_codegen.rejections import UnresolvableNameError
 from pydantic_codegen.transformers import (
     AmbiguousRenameError,
     UnknownFieldError,
@@ -195,11 +196,23 @@ def test_set_bases_parametrises_a_generic_base_and_imports_every_symbol() -> Non
         "FlowbasePayloadModel",
         "pydantic_codegen.test_corpus_generic:Identified[abc:ABC",
         "pydantic_codegen.test_corpus_generic:Identified[FolderId]",
+        "pydantic_codegen.test_corpus_generic:Identified[a:Outer[b:Inner]]",
     ],
 )
-def test_set_bases_rejects_a_target_that_is_not_module_qualified(target: str) -> None:
+def test_set_bases_rejects_a_malformed_target(target: str) -> None:
     with pytest.raises(MalformedTargetError):
         _ = pipe([_annotated(AnnotationText("Name"))], set_bases(target))
+
+
+def test_set_bases_rejects_an_argument_its_module_does_not_define() -> None:
+    with pytest.raises(UnresolvableNameError, match="Missing"):
+        _ = pipe(
+            [_annotated(AnnotationText("Name"))],
+            set_bases(
+                "pydantic_codegen.test_corpus_generic:Identified"
+                "[pydantic_codegen.test_corpus_asset_location:Missing]"
+            ),
+        )
 
 
 def test_rename_model_applies_a_callable_to_every_model() -> None:

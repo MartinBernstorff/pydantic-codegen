@@ -22,6 +22,11 @@ PAIR = "pydantic_codegen.test_corpus_pair:Pair"
 COMMENT = "pydantic_codegen.test_corpus_identified:Comment"
 DEFERRED = "pydantic_codegen.test_corpus_deferred:Deferred"
 ATTRIBUTED = "pydantic_codegen.test_corpus_attributed:Attributed"
+IDENTIFIED = "pydantic_codegen.test_corpus_identified:Identified"
+GENERIC = (
+    "pydantic_codegen.test_corpus_generic:Identified"
+    "[pydantic_codegen.test_corpus_asset_location:FolderId]"
+)
 
 
 def _source(models: list[Model]) -> PythonSource:
@@ -97,25 +102,26 @@ def test_a_base_set_by_the_recipe_may_declare_fields_the_model_does_not() -> Non
     source = _source(
         pipe(
             load(SUBFOLDER),
-            set_bases("pydantic_codegen.test_corpus_identified:Identified"),
+            set_bases(IDENTIFIED),
         )
     )
 
     assert "class Subfolder(Identified):" in source.root
 
 
+@pytest.mark.parametrize(
+    "base",
+    [IDENTIFIED, GENERIC],
+)
 def test_a_base_set_by_the_recipe_that_the_model_redeclares_is_an_error(
-    tmp_path: Path,
+    tmp_path: Path, base: str
 ) -> None:
     with pytest.raises(RedeclaredBaseFieldError, match="id"):
         _ = generated(
             [
                 File(
                     str(tmp_path / "based.py"),
-                    pipe(
-                        load(COMMENT),
-                        set_bases("pydantic_codegen.test_corpus_identified:Identified"),
-                    ),
+                    pipe(load(COMMENT), set_bases(base)),
                 )
             ]
         )
@@ -125,10 +131,7 @@ def test_a_parametrised_base_renders_its_argument_and_imports_both() -> None:
     source = _source(
         pipe(
             load(SUBFOLDER),
-            set_bases(
-                "pydantic_codegen.test_corpus_generic:Identified"
-                "[pydantic_codegen.test_corpus_asset_location:FolderId]"
-            ),
+            set_bases(GENERIC),
         )
     )
 
