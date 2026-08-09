@@ -2,10 +2,12 @@ import ast
 import builtins
 import importlib
 import inspect
+from functools import partial
 from types import ModuleType
+from typing import TypeVar
 
 from iterpy import Arr
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
@@ -34,6 +36,31 @@ class MalformedTargetError(Exception):
 class UnrepresentableError(Exception): ...
 
 
+class UnboundTypeParameterError(UnrepresentableError):
+    def __init__(self, model: ModelName, parameter: SymbolName) -> None:
+        super().__init__(
+            f"{model.root} leaves the type parameter {parameter.root} unbound; "
+            f"load a parametrised alias or a concrete subclass instead"
+        )
+
+
+class RootModelSourceError(UnrepresentableError):
+    def __init__(self, model: ModelName) -> None:
+        super().__init__(
+            f"{model.root} is a RootModel, which has a root rather than fields"
+        )
+
+
+class ValidatorError(UnrepresentableError):
+    def __init__(self, model: ModelName, validator: SymbolName) -> None:
+        super().__init__(f"{model.root} validates through {validator.root}")
+
+
+class ComputedFieldError(UnrepresentableError):
+    def __init__(self, model: ModelName, field: FieldName) -> None:
+        super().__init__(f"{model.root} computes {field.root} rather than declaring it")
+
+
 class UndeclaredFieldError(UnrepresentableError):
     def __init__(self, model: ModelName, field: FieldName) -> None:
         super().__init__(f"{model.root} does not declare {field.root} itself")
@@ -46,6 +73,7 @@ class UnresolvableNameError(UnrepresentableError):
 
 class ParsedModule:
     def __init__(self, module: ModuleType) -> None:
+        self.module = module
         self.name = ModuleName(module.__name__)
         self.source = PythonSource(inspect.getsource(module))
         self.tree = ast.parse(self.source.root)
@@ -53,12 +81,30 @@ class ParsedModule:
     def segment(self, node: ast.expr) -> PythonSource:
         return PythonSource(ast.get_source_segment(self.source.root, node) or "")
 
-    def class_def(self, name: ModelName) -> ast.ClassDef:
+    def class_body(self, name: ModelName) -> list[ast.stmt]:
+        definition = self._class_def(name)
+        return definition.body if definition else []
+
+    def class_bases(self, name: ModelName) -> list[ast.expr]:
+        definition = self._class_def(name)
+        return definition.bases if definition else []
+
+    def _class_def(self, name: ModelName) -> ast.ClassDef | None:
         return next(
-            node
-            for node in self.tree.body
-            if isinstance(node, ast.ClassDef) and node.name == name.root
+            (
+                node
+                for node in self.tree.body
+                if isinstance(node, ast.ClassDef) and node.name == name.root
+            ),
+            None,
         )
+
+    def type_parameters(self) -> set[SymbolName]:
+        return {
+            SymbolName(name)
+            for name, bound in vars(self.module).items()
+            if isinstance(bound, TypeVar)
+        }
 
     def import_of(self, name: SymbolName) -> Import:
         bound = {
@@ -126,8 +172,16 @@ def _free_names(node: ast.expr) -> Arr[SymbolName]:
     )
 
 
-def _imports_for(node: ast.expr, parsed: ParsedModule) -> tuple[Import, ...]:
-    return tuple(_free_names(node).map(parsed.import_of).to_list())
+def _resolve(parsed: ParsedModule, owner: ModelName, name: SymbolName) -> Import:
+    if name in parsed.type_parameters():
+        raise UnboundTypeParameterError(owner, name)
+    return parsed.import_of(name)
+
+
+def _imports_for(
+    node: ast.expr, parsed: ParsedModule, owner: ModelName
+) -> tuple[Import, ...]:
+    return tuple(_free_names(node).map(partial(_resolve, parsed, owner)).to_list())
 
 
 def _annotated_assign(
@@ -136,7 +190,7 @@ def _annotated_assign(
     assign = next(
         (
             node
-            for node in parsed.class_def(owner).body
+            for node in parsed.class_body(owner)
             if isinstance(node, ast.AnnAssign)
             and isinstance(node.target, ast.Name)
             and node.target.id == name.root
@@ -155,15 +209,15 @@ def _field(parsed: ParsedModule, owner: ModelName, name: FieldName) -> Field:
         name=name,
         annotation=AnnotationText(parsed.segment(assign.annotation).root),
         default=DefaultText(parsed.segment(assigned).root) if assigned else None,
-        imports=_imports_for(assign.annotation, parsed)
-        + (_imports_for(assigned, parsed) if assigned else ()),
+        imports=_imports_for(assign.annotation, parsed, owner)
+        + (_imports_for(assigned, parsed, owner) if assigned else ()),
     )
 
 
 def _model(cls: type[BaseModel]) -> Model:
     parsed = ParsedModule(inspect.getmodule(cls))  # pyrefly: ignore
     owner = ModelName(cls.__name__)
-    bases = Arr(parsed.class_def(owner).bases)
+    bases = Arr(parsed.class_bases(owner))
     return Model(
         name=owner,
         bases=tuple(
@@ -175,9 +229,27 @@ def _model(cls: type[BaseModel]) -> Model:
             .to_list()
         ),
         imports=tuple(
-            bases.map(lambda base: _imports_for(base, parsed)).flatten().to_list()
+            bases.map(lambda base: _imports_for(base, parsed, owner))
+            .flatten()
+            .to_list()
         ),
     )
+
+
+def _reject_unrepresentable(cls: type[BaseModel]) -> None:
+    name = ModelName(cls.__name__)
+    parameters = cls.__pydantic_generic_metadata__["parameters"]
+    if parameters:
+        raise UnboundTypeParameterError(name, SymbolName(parameters[0].__name__))
+    if issubclass(cls, RootModel):
+        raise RootModelSourceError(name)
+    decorators = cls.__pydantic_decorators__
+    validators = list(decorators.field_validators) + list(decorators.model_validators)
+    if validators:
+        raise ValidatorError(name, SymbolName(validators[0]))
+    computed = list(decorators.computed_fields)
+    if computed:
+        raise ComputedFieldError(name, FieldName(computed[0]))
 
 
 def load(target: ModelTarget) -> Arr[Model]:
@@ -185,4 +257,6 @@ def load(target: ModelTarget) -> Arr[Model]:
     if not separator:
         raise MalformedTargetError(target)
     module = importlib.import_module(module_name)
-    return Arr([_model(getattr(module, class_name))])
+    cls = getattr(module, class_name)
+    _reject_unrepresentable(cls)
+    return Arr([_model(cls)])
