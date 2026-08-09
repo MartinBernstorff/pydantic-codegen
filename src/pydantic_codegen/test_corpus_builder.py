@@ -25,15 +25,21 @@ class SourceModule(BaseModel):
 def corpus(root: Path, modules: list[SourceModule]) -> Generator[None, None, None]:
     root.mkdir(parents=True, exist_ok=True)
     for module in modules:
-        _ = (root / f"{module.name.root}.py").write_text(module.source.root)
+        *packages, leaf = module.name.root.split(".")
+        directory = root.joinpath(*packages)
+        directory.mkdir(parents=True, exist_ok=True)
+        for depth in range(len(packages)):
+            (root.joinpath(*packages[: depth + 1]) / "__init__.py").touch()
+        _ = (directory / f"{leaf}.py").write_text(module.source.root)
     sys.path.insert(0, str(root))
     importlib.invalidate_caches()
     try:
         yield
     finally:
         sys.path.remove(str(root))
-        for module in modules:
-            _ = sys.modules.pop(module.name.root, None)
+        bound = {module.name.root for module in modules}
+        for name in bound | {name.split(".")[0] for name in bound}:
+            _ = sys.modules.pop(name, None)
 
 
 TAGGING = SourceModule(

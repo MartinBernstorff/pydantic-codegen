@@ -12,8 +12,6 @@ fileGroups:
   manifests:
     - 'pyproject.toml'
     - 'uv.lock'
-  goldens:
-    - 'src/**/*.golden'
   workflows:
     - '.github/workflows/*.yml'
 
@@ -22,14 +20,8 @@ tasks:
     script: 'uv run pytest'
     inputs:
       - '@group(sources)'
-      - '@group(goldens)'
       - '@group(manifests)'
       - 'pytest.toml'
-
-  goldens:
-    script: 'UPDATE_GOLDENS=1 uv run pytest src/pydantic_codegen/test_corpus.py'
-    options:
-      runInCI: false
 
   typecheck:
     script: 'uv run pyrefly check src'
