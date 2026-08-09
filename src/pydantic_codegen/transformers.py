@@ -43,8 +43,12 @@ def _with_fields(model: Model, fields: Arr[Field]) -> list[Model]:
     return [model.model_copy(update={"fields": tuple(fields.to_list())})]
 
 
+def _declared(model: Model) -> set[FieldName]:
+    return set(Arr(model.fields).map(lambda field: field.name).to_list())
+
+
 def _selected(model: Model, names: tuple[str, ...]) -> set[FieldName]:
-    declared = {field.name for field in model.fields}
+    declared = _declared(model)
     selected = Arr(names).map(FieldName)
     unknown = selected.filter(lambda name: name not in declared).to_list()
     if unknown:
@@ -52,16 +56,14 @@ def _selected(model: Model, names: tuple[str, ...]) -> set[FieldName]:
     return set(selected.to_list())
 
 
-class DeclaredFieldError(Exception):
+class DuplicateFieldError(Exception):
     def __init__(self, model: Model, name: FieldName) -> None:
-        super().__init__(
-            f"{model.name.root} already declares {name.root}; adding it would declare "
-            f"it a second time"
-        )
+        super().__init__(f"{model.name.root} already declares {name.root}")
 
 
+# `default` is positional and required so that a lone import cannot silently bind to it.
 def add_field(
-    name: str, annotation: str, default: str | None = None, *imports: str
+    name: str, annotation: str, default: str | None, *imports: str
 ) -> Transformer:
     added = Field(
         name=FieldName(name),
@@ -71,8 +73,8 @@ def add_field(
     )
 
     def appended(model: Model) -> list[Model]:
-        if any(field.name == added.name for field in model.fields):
-            raise DeclaredFieldError(model, added.name)
+        if added.name in _declared(model):
+            raise DuplicateFieldError(model, added.name)
         return _with_fields(model, Arr(model.fields).chain(Arr([added])))
 
     return each(appended)

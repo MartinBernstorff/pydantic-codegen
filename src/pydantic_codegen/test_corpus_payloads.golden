@@ -3,13 +3,14 @@
 from typing import Literal
 
 from pydantic.experimental.missing_sentinel import MISSING
+from pydantic_codegen.test_corpus_kinds import SubfolderKind
 from pydantic_codegen.test_corpus_payload_base import PatchPayloadModel, PayloadModel
 from pydantic_codegen.test_corpus_subfolder import SubfolderName
 
 
 class CreateSubfolderPayload(PayloadModel):
     name: SubfolderName
-    kind: Literal["subfolder"] = "subfolder"
+    kind: Literal[SubfolderKind.SUBFOLDER] = SubfolderKind.SUBFOLDER
 
 
 class UpdateSubfolderPayload(PatchPayloadModel):

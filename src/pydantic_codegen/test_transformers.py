@@ -16,7 +16,7 @@ from pydantic_codegen.ir import (
 from pydantic_codegen.loader import MalformedTargetError
 from pydantic_codegen.transformers import (
     AmbiguousRenameError,
-    DeclaredFieldError,
+    DuplicateFieldError,
     UnknownFieldError,
     add_field,
     each,
@@ -264,11 +264,11 @@ def test_add_field_rejects_a_bare_import_symbol() -> None:
 
 
 def test_add_field_leaves_a_field_without_a_default_required() -> None:
-    [transformed] = pipe([_model()], add_field("kind", "str"))
+    [transformed] = pipe([_model()], add_field("kind", "str", None))
 
     assert transformed.fields[-1].default is None
 
 
-def test_add_field_refuses_to_shadow_a_declared_field() -> None:
-    with pytest.raises(DeclaredFieldError):
-        _ = pipe([_model(FieldName("kind"))], add_field("kind", "str"))
+def test_add_field_refuses_to_add_an_already_declared_field() -> None:
+    with pytest.raises(DuplicateFieldError):
+        _ = pipe([_model(FieldName("kind"))], add_field("kind", "str", None))

@@ -23,7 +23,13 @@ payload = pipe(
 
 create = pipe(
     payload,
-    add_field("kind", "Literal['subfolder']", "'subfolder'", "typing:Literal"),
+    add_field(
+        "kind",
+        "Literal[SubfolderKind.SUBFOLDER]",
+        "SubfolderKind.SUBFOLDER",
+        "typing:Literal",
+        "pydantic_codegen.test_corpus_kinds:SubfolderKind",
+    ),
     set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel"),
     rename_model(lambda name: f"Create{name}Payload"),
 )
