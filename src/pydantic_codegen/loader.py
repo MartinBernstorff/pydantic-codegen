@@ -36,11 +36,22 @@ class MalformedTargetError(Exception):
 class UnrepresentableError(Exception): ...
 
 
-class UnboundTypeParameterError(UnrepresentableError):
+class UnboundTypeParameterError(UnrepresentableError): ...
+
+
+class UnparametrisedModelError(UnboundTypeParameterError):
     def __init__(self, model: ModelName, parameter: SymbolName) -> None:
         super().__init__(
             f"{model.root} leaves the type parameter {parameter.root} unbound; "
             f"load a parametrised alias or a concrete subclass instead"
+        )
+
+
+class TypeParameterAnnotationError(UnboundTypeParameterError):
+    def __init__(self, model: ModelName, parameter: SymbolName) -> None:
+        super().__init__(
+            f"{model.root} annotates a field with the type parameter "
+            f"{parameter.root}, which stands for no concrete type"
         )
 
 
@@ -66,6 +77,14 @@ class UndeclaredFieldError(UnrepresentableError):
         super().__init__(f"{model.root} does not declare {field.root} itself")
 
 
+class UndeclaredModelError(UnrepresentableError):
+    def __init__(self, module: ModuleName, model: ModelName) -> None:
+        super().__init__(
+            f"{module.root} holds no class statement for {model.root}, "
+            f"so there is no source to read its bases and fields from"
+        )
+
+
 class UnresolvableNameError(UnrepresentableError):
     def __init__(self, module: ModuleName, name: SymbolName) -> None:
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
@@ -73,10 +92,14 @@ class UnresolvableNameError(UnrepresentableError):
 
 class ParsedModule:
     def __init__(self, module: ModuleType) -> None:
-        self.module = module
         self.name = ModuleName(module.__name__)
         self.source = PythonSource(inspect.getsource(module))
         self.tree = ast.parse(self.source.root)
+        self.type_parameters = {
+            SymbolName(bound_name)
+            for bound_name, bound in vars(module).items()
+            if isinstance(bound, TypeVar)
+        }
 
     def segment(self, node: ast.expr) -> PythonSource:
         return PythonSource(ast.get_source_segment(self.source.root, node) or "")
@@ -87,7 +110,9 @@ class ParsedModule:
 
     def class_bases(self, name: ModelName) -> list[ast.expr]:
         definition = self._class_def(name)
-        return definition.bases if definition else []
+        if definition is None:
+            raise UndeclaredModelError(self.name, name)
+        return definition.bases
 
     def _class_def(self, name: ModelName) -> ast.ClassDef | None:
         return next(
@@ -98,13 +123,6 @@ class ParsedModule:
             ),
             None,
         )
-
-    def type_parameters(self) -> set[SymbolName]:
-        return {
-            SymbolName(name)
-            for name, bound in vars(self.module).items()
-            if isinstance(bound, TypeVar)
-        }
 
     def import_of(self, name: SymbolName) -> Import:
         bound = {
@@ -173,8 +191,8 @@ def _free_names(node: ast.expr) -> Arr[SymbolName]:
 
 
 def _resolve(parsed: ParsedModule, owner: ModelName, name: SymbolName) -> Import:
-    if name in parsed.type_parameters():
-        raise UnboundTypeParameterError(owner, name)
+    if name in parsed.type_parameters:
+        raise TypeParameterAnnotationError(owner, name)
     return parsed.import_of(name)
 
 
@@ -217,17 +235,20 @@ def _field(parsed: ParsedModule, owner: ModelName, name: FieldName) -> Field:
 def _model(cls: type[BaseModel]) -> Model:
     parsed = ParsedModule(inspect.getmodule(cls))  # pyrefly: ignore
     owner = ModelName(cls.__name__)
+    # Fields before bases: an undeclared field is the more precise rejection, and
+    # reading the bases of a model with no class statement is what raises otherwise.
+    fields = (
+        Arr(list(cls.model_fields))
+        .map(lambda name: _field(parsed, owner, FieldName(name)))
+        .to_list()
+    )
     bases = Arr(parsed.class_bases(owner))
     return Model(
         name=owner,
         bases=tuple(
             bases.map(lambda base: BaseName(parsed.segment(base).root)).to_list()
         ),
-        fields=tuple(
-            Arr(list(cls.model_fields))
-            .map(lambda name: _field(parsed, owner, FieldName(name)))
-            .to_list()
-        ),
+        fields=tuple(fields),
         imports=tuple(
             bases.map(lambda base: _imports_for(base, parsed, owner))
             .flatten()
@@ -240,7 +261,7 @@ def _reject_unrepresentable(cls: type[BaseModel]) -> None:
     name = ModelName(cls.__name__)
     parameters = cls.__pydantic_generic_metadata__["parameters"]
     if parameters:
-        raise UnboundTypeParameterError(name, SymbolName(parameters[0].__name__))
+        raise UnparametrisedModelError(name, SymbolName(parameters[0].__name__))
     if issubclass(cls, RootModel):
         raise RootModelSourceError(name)
     decorators = cls.__pydantic_decorators__
