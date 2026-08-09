@@ -6,6 +6,7 @@ from pathlib import Path
 RECIPE = """
 from pydantic_codegen import (
     File,
+    add_field,
     load,
     omit,
     partial_sentinel,
@@ -22,6 +23,7 @@ payload = pipe(
 
 create = pipe(
     payload,
+    add_field("kind", "Literal['subfolder']", "'subfolder'", "typing:Literal"),
     set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel"),
     rename_model(lambda name: f"Create{name}Payload"),
 )

@@ -1,5 +1,6 @@
 from pydantic_codegen.loader import load
 from pydantic_codegen.transformers import (
+    add_field,
     each,
     each_field,
     omit,

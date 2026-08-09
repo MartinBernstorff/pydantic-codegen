@@ -52,6 +52,32 @@ def _selected(model: Model, names: tuple[str, ...]) -> set[FieldName]:
     return set(selected.to_list())
 
 
+class DeclaredFieldError(Exception):
+    def __init__(self, model: Model, name: FieldName) -> None:
+        super().__init__(
+            f"{model.name.root} already declares {name.root}; adding it would declare "
+            f"it a second time"
+        )
+
+
+def add_field(
+    name: str, annotation: str, default: str | None = None, *imports: str
+) -> Transformer:
+    added = Field(
+        name=FieldName(name),
+        annotation=AnnotationText(annotation),
+        default=None if default is None else DefaultText(default),
+        imports=tuple(Arr(imports).map(ModelTarget).map(imported).to_list()),
+    )
+
+    def appended(model: Model) -> list[Model]:
+        if any(field.name == added.name for field in model.fields):
+            raise DeclaredFieldError(model, added.name)
+        return _with_fields(model, Arr(model.fields).chain(Arr([added])))
+
+    return each(appended)
+
+
 def omit(*names: str) -> Transformer:
     def dropped(model: Model) -> list[Model]:
         selected = _selected(model, names)

@@ -16,7 +16,9 @@ from pydantic_codegen.ir import (
 from pydantic_codegen.loader import MalformedTargetError
 from pydantic_codegen.transformers import (
     AmbiguousRenameError,
+    DeclaredFieldError,
     UnknownFieldError,
+    add_field,
     each,
     each_field,
     omit,
@@ -220,3 +222,53 @@ def test_partial_none_widens_an_annotation_whose_none_is_nested() -> None:
     assert transformed.fields[0].annotation == AnnotationText(
         "Callable[[int], None] | None"
     )
+
+
+def test_add_field_appends_a_constant_field() -> None:
+    [transformed] = pipe(
+        [_model(FieldName("id"))],
+        add_field("kind", "Literal['subfolder']", "'subfolder'"),
+    )
+
+    assert transformed.fields[-1] == Field(
+        name=FieldName("kind"),
+        annotation=AnnotationText("Literal['subfolder']"),
+        default=DefaultText("'subfolder'"),
+    )
+
+
+def test_add_field_resolves_its_imports_from_targets() -> None:
+    [transformed] = pipe(
+        [_model()],
+        add_field(
+            "parent",
+            "FolderId | Literal['root']",
+            None,
+            "typing:Literal",
+            "pydantic_codegen.test_corpus_asset_location:FolderId",
+        ),
+    )
+
+    assert transformed.fields[-1].imports == (
+        Import(module=ModuleName("typing"), name=SymbolName("Literal")),
+        Import(
+            module=ModuleName("pydantic_codegen.test_corpus_asset_location"),
+            name=SymbolName("FolderId"),
+        ),
+    )
+
+
+def test_add_field_rejects_a_bare_import_symbol() -> None:
+    with pytest.raises(MalformedTargetError):
+        _ = add_field("kind", "Literal['a']", "'a'", "Literal")
+
+
+def test_add_field_leaves_a_field_without_a_default_required() -> None:
+    [transformed] = pipe([_model()], add_field("kind", "str"))
+
+    assert transformed.fields[-1].default is None
+
+
+def test_add_field_refuses_to_shadow_a_declared_field() -> None:
+    with pytest.raises(DeclaredFieldError):
+        _ = pipe([_model(FieldName("kind"))], add_field("kind", "str"))
