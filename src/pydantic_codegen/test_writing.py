@@ -3,7 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pydantic_codegen.loader import load
 from pydantic_codegen.test_corpus_subfolder import Subfolder
+from pydantic_codegen.writing import File, generated
+
+SUBFOLDER = "pydantic_codegen.test_corpus_subfolder:Subfolder"
 
 RECIPE = """
 from pydantic_codegen.loader import load
@@ -29,6 +33,16 @@ def _recipe_repo(root: Path) -> Path:
 
 def _run(recipe: Path, working_directory: Path) -> None:
     _ = subprocess.run([sys.executable, str(recipe)], cwd=working_directory, check=True)
+
+
+def test_generated_pairs_the_output_path_with_its_source(tmp_path: Path) -> None:
+    destination = tmp_path / "subfolder.py"
+
+    only = generated([File(str(destination), load(SUBFOLDER))])[0]
+
+    assert only.path == destination
+    assert "class Subfolder(BaseModel):" in only.source.root
+    assert not destination.exists()
 
 
 def test_output_is_independent_of_working_directory(tmp_path: Path) -> None:

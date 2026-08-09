@@ -5,10 +5,11 @@ import subprocess
 from pathlib import Path
 
 from iterpy import Arr
-from pydantic import ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 from pydantic_codegen.gates import reject_duplicate_paths, reject_unwritable
 from pydantic_codegen.ir import FrozenText, Model
+from pydantic_codegen.python_source import PythonSource
 from pydantic_codegen.renderer import RecipeLabel, rendered
 
 
@@ -49,6 +50,13 @@ class File:
         return RecipeLabel(f"/{self.recipe.relative_to(root)}")
 
 
+class GeneratedFile(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: Path
+    source: PythonSource
+
+
 def _ruff() -> RuffExecutable:
     found = shutil.which("ruff")
     if found is None:
@@ -56,12 +64,12 @@ def _ruff() -> RuffExecutable:
     return RuffExecutable(Path(found))
 
 
-def _format(files: list[File], ruff: RuffExecutable) -> None:
-    written = Arr(files).map(lambda file: str(file.path)).to_list()
+def _format(outputs: list[GeneratedFile], ruff: RuffExecutable) -> None:
+    written = Arr(outputs).map(lambda output: str(output.path)).to_list()
     # ruff discovers config by walking up from its working directory, so cwd decides
     # which config the output is formatted with.
     directory = os.path.commonpath(
-        Arr(files).map(lambda file: str(file.path.parent)).to_list()
+        Arr(outputs).map(lambda output: str(output.path.parent)).to_list()
     )
     _ = subprocess.run(
         [str(ruff.root), "check", "--select", "I", "--fix", *written],
@@ -71,15 +79,27 @@ def _format(files: list[File], ruff: RuffExecutable) -> None:
     _ = subprocess.run([str(ruff.root), "format", *written], cwd=directory, check=True)
 
 
-def write(files: list[File]) -> None:
-    if not files:
-        return
+def generated(files: list[File]) -> list[GeneratedFile]:
     reject_duplicate_paths(Arr(files).map(lambda file: file.path).to_list())
     for file in files:
         reject_unwritable(file.path, file.models)
+    return (
+        Arr(files)
+        .map(
+            lambda file: GeneratedFile(
+                path=file.path, source=rendered(file.models, file.label())
+            )
+        )
+        .to_list()
+    )
+
+
+def write(files: list[File]) -> None:
+    if not files:
+        return
+    outputs = generated(files)
     ruff = _ruff()
-    labelled = Arr(files).map(lambda file: (file, file.label())).to_list()
-    for file, label in labelled:
-        file.path.parent.mkdir(parents=True, exist_ok=True)
-        _ = file.path.write_text(rendered(file.models, label).root)
-    _format(files, ruff)
+    for output in outputs:
+        output.path.parent.mkdir(parents=True, exist_ok=True)
+        _ = output.path.write_text(output.source.root)
+    _format(outputs, ruff)
