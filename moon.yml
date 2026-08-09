@@ -12,6 +12,8 @@ fileGroups:
   manifests:
     - 'pyproject.toml'
     - 'uv.lock'
+  goldens:
+    - 'src/**/*.golden'
   workflows:
     - '.github/workflows/*.yml'
 
@@ -20,6 +22,7 @@ tasks:
     script: 'uv run pytest'
     inputs:
       - '@group(sources)'
+      - '@group(goldens)'
       - '@group(manifests)'
       - 'pytest.toml'
 
@@ -70,7 +73,8 @@ tasks:
       - 'tach.toml'
 
   noprim:
-    script: 'uv run noprim check .'
+    # pytest's tmp_path fixture is annotated Path, so a Path parameter cannot be wrapped.
+    script: 'uv run noprim check . --allow Path'
     inputs:
       - '@group(sources)'
       - '@group(manifests)'
