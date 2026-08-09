@@ -7,6 +7,10 @@ A Python library, published to PyPI as `pydantic-codegen`.
 One package, one distribution: `src/pydantic_codegen/`. Tests live beside the code
 they test. `tach` enforces module boundaries as the package grows.
 
+## Tickets
+
+We use Todoist tickets to track work. All work is tagged with "@it-pydantic-codegen".
+
 ## Python
 
 - **Never take primitives as function parameters.** Wrap them in a Pydantic `RootModel` — a `str` says nothing about what it is; `ModuleName` does. Enforced by `moon run :noprim`.
