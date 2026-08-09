@@ -33,6 +33,7 @@ write([File(OutputPath("generated/model.py"), load(ModelTarget("{target}")))])
 
 
 def _generated(target: ModelTarget, root: Path) -> Path:
+    # File.label() walks up for a .git directory, so the recipe needs a repo to sit in.
     (root / ".git").mkdir()
     recipe = root / "codegen.py"
     _ = recipe.write_text(RECIPE.format(target=target.root))
@@ -41,18 +42,18 @@ def _generated(target: ModelTarget, root: Path) -> Path:
 
 
 def _golden(target: ModelTarget) -> Path:
-    module, _, model = target.root.partition(":")
-    return Path(__file__).parent / f"{module.rpartition('.')[2]}.{model}.golden"
+    module = target.module().root.rpartition(".")[2]
+    return Path(__file__).parent / f"{module}.{target.model().root}.golden"
 
 
 def _source_model(target: ModelTarget) -> type[BaseModel]:
-    module, _, model = target.root.partition(":")
-    source: type[BaseModel] = getattr(importlib.import_module(module), model)
+    module = importlib.import_module(target.module().root)
+    source: type[BaseModel] = getattr(module, target.model().root)
     return source
 
 
 def _imported_model(target: ModelTarget, generated: Path) -> type[BaseModel]:
-    _, _, model = target.root.partition(":")
+    model = target.model().root
     name = f"generated_{model}"
     spec = importlib.util.spec_from_file_location(name, generated)
     module = importlib.util.module_from_spec(spec)  # pyrefly: ignore

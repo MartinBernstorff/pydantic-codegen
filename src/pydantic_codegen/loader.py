@@ -26,7 +26,18 @@ from pydantic_codegen.ir import (
 from pydantic_codegen.python_source import PythonSource
 
 
-class ModelTarget(FrozenText): ...
+class ModelTarget(FrozenText):
+    def module(self) -> ModuleName:
+        written, separator, _ = self.root.partition(":")
+        if not separator:
+            raise MalformedTargetError(self)
+        return ModuleName(written)
+
+    def model(self) -> ModelName:
+        _, separator, written = self.root.partition(":")
+        if not separator:
+            raise MalformedTargetError(self)
+        return ModelName(written)
 
 
 class MalformedTargetError(Exception):
@@ -50,6 +61,14 @@ class UnresolvableNameError(UnrepresentableError):
 class UnboundTypeParameterError(UnrepresentableError):
     def __init__(self, model: ModelName, name: SymbolName) -> None:
         super().__init__(f"{model.root} leaves type parameter {name.root} unbound")
+
+
+class UnnameableArgumentError(UnrepresentableError):
+    def __init__(self, model: ModelName, name: SymbolName) -> None:
+        super().__init__(
+            f"{model.root} binds a type parameter to {name.root}, which "
+            "substitution can only write as a bare name"
+        )
 
 
 class ParsedModule:
@@ -134,11 +153,12 @@ class ParsedModule:
 class NameSource:
     def __init__(
         self,
+        *,
         declaring: ParsedModule,
         loaded: ParsedModule,
         model: ModelName,
-        substituted: frozenset[SymbolName],
-        unbound: frozenset[SymbolName],
+        substituted: frozenset[SymbolName] = frozenset(),
+        unbound: frozenset[SymbolName] = frozenset(),
     ) -> None:
         self.declaring = declaring
         self.loaded = loaded
@@ -228,16 +248,15 @@ class Substitution(BaseModel):
     parameter: SymbolName
     argument: SymbolName
 
-    def applied(self, text: PythonSource) -> PythonSource:
-        return PythonSource(
-            re.sub(
-                rf"\b{re.escape(self.parameter.root)}\b", self.argument.root, text.root
-            )
-        )
-
 
 def _applied(text: PythonSource, substitution: Substitution) -> PythonSource:
-    return substitution.applied(text)
+    return PythonSource(
+        re.sub(
+            rf"\b{re.escape(substitution.parameter.root)}\b",
+            substitution.argument.root,
+            text.root,
+        )
+    )
 
 
 def _substituted(text: PythonSource, pairs: Arr[Substitution]) -> PythonSource:
@@ -255,27 +274,38 @@ def _models_in_mro(cls: type[BaseModel]) -> list[type[BaseModel]]:
     ]
 
 
-def _argument_name(argument: type) -> SymbolName:
+def _argument_name(model: ModelName, argument: type) -> SymbolName:
+    if not isinstance(argument, type):
+        raise UnnameableArgumentError(model, SymbolName(str(argument)))
     return SymbolName(argument.__name__)
 
 
-def _substitutions(cls: type[BaseModel]) -> Arr[Substitution]:
+def _parametrised(model: ModelName, entry: type[BaseModel]) -> Arr[Substitution]:
+    metadata = entry.__pydantic_generic_metadata__
+    origin = metadata["origin"]
+    if origin is None:
+        return Arr([])
     return Arr(
         [
             Substitution(
                 parameter=SymbolName(parameter.__name__),
-                argument=_argument_name(argument),
+                argument=_argument_name(model, argument),
             )
-            for entry in _models_in_mro(cls)
-            for metadata in [entry.__pydantic_generic_metadata__]
-            for origin in [metadata["origin"]]
-            if origin is not None
             for parameter, argument in zip(
                 origin.__pydantic_generic_metadata__["parameters"],
                 metadata["args"],
                 strict=False,
             )
         ]
+    )
+
+
+def _substitutions(cls: type[BaseModel]) -> Arr[Substitution]:
+    model = ModelName(cls.__name__)
+    return (
+        Arr(_models_in_mro(cls))
+        .map(lambda entry: _parametrised(model, entry))
+        .flatten()
     )
 
 
@@ -330,17 +360,19 @@ def _imports_for(names: Arr[SymbolName], source: NameSource) -> tuple[Import, ..
     return tuple(names.map(source.import_of).to_list())
 
 
-def _field(cls: type[BaseModel], loaded: ParsedModule, name: FieldName) -> Field:
+def _field(cls: type[BaseModel], name: FieldName) -> Field:
     declaring_class = _declaring_class(cls, name)
     declaring = _parsed_module(inspect.getmodule(declaring_class))
     assign = _annotated_assign(declaring, ModelName(declaring_class.__name__), name)
     pairs = _substitutions(cls)
     source = NameSource(
-        declaring,
-        loaded,
-        ModelName(cls.__name__),
-        frozenset(pairs.map(lambda pair: pair.argument).to_list()),
-        frozenset(_parameters(cls) - set(pairs.map(lambda pair: pair.parameter))),
+        declaring=declaring,
+        loaded=_parsed_module(inspect.getmodule(cls)),
+        model=ModelName(cls.__name__),
+        substituted=frozenset(pairs.map(lambda pair: pair.argument).to_list()),
+        unbound=frozenset(
+            _parameters(cls) - set(pairs.map(lambda pair: pair.parameter))
+        ),
     )
     annotation = _substituted(declaring.segment(assign.annotation), pairs)
     parsed = _parsed_expression(annotation)
@@ -358,7 +390,7 @@ def _model(cls: type[BaseModel]) -> Model:
     loaded = _parsed_module(inspect.getmodule(cls))
     owner = ModelName(cls.__name__)
     bases = Arr(loaded.class_def(owner).bases)
-    source = NameSource(loaded, loaded, owner, frozenset(), frozenset())
+    source = NameSource(declaring=loaded, loaded=loaded, model=owner)
     return Model(
         name=owner,
         bases=tuple(
@@ -366,7 +398,7 @@ def _model(cls: type[BaseModel]) -> Model:
         ),
         fields=tuple(
             Arr(list(cls.model_fields))
-            .map(lambda name: _field(cls, loaded, FieldName(name)))
+            .map(lambda name: _field(cls, FieldName(name)))
             .to_list()
         ),
         imports=tuple(
@@ -378,8 +410,5 @@ def _model(cls: type[BaseModel]) -> Model:
 
 
 def load(target: ModelTarget) -> Arr[Model]:
-    module_name, separator, class_name = target.root.partition(":")
-    if not separator:
-        raise MalformedTargetError(target)
-    module = importlib.import_module(module_name)
-    return Arr([_model(getattr(module, class_name))])
+    module = importlib.import_module(target.module().root)
+    return Arr([_model(getattr(module, target.model().root))])

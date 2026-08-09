@@ -18,6 +18,7 @@ from pydantic_codegen.loader import (
     ModelTarget,
     UnboundTypeParameterError,
     UndeclaredFieldError,
+    UnnameableArgumentError,
     UnresolvableNameError,
     load,
 )
@@ -129,6 +130,11 @@ def test_a_field_no_class_in_the_mro_declares_is_unrepresentable() -> None:
 def test_an_unbound_type_parameter_is_unrepresentable() -> None:
     with pytest.raises(UnboundTypeParameterError):
         _ = load(ModelTarget("pydantic_codegen.test_corpus_generic:Identified"))
+
+
+def test_a_type_parameter_bound_to_more_than_a_bare_name_is_unrepresentable() -> None:
+    with pytest.raises(UnnameableArgumentError):
+        _ = load(ModelTarget("pydantic_codegen.test_corpus_parametrised:Listed"))
 
 
 def test_a_name_the_module_neither_imports_nor_defines_is_unrepresentable() -> None:
