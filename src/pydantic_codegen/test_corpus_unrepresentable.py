@@ -11,7 +11,8 @@ from pydantic import (
 )
 
 from pydantic_codegen.ir import Model, SymbolName
-from pydantic_codegen.loader import (
+from pydantic_codegen.loader import load
+from pydantic_codegen.rejections import (
     ComputedFieldError,
     RootModelSourceError,
     TypeParameterAnnotationError,
@@ -19,7 +20,6 @@ from pydantic_codegen.loader import (
     UndeclaredFieldError,
     UndeclaredModelError,
     ValidatorError,
-    load,
 )
 
 
