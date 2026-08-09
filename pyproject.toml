@@ -1,0 +1,43 @@
+[project]
+name = "pydantic-codegen"
+dynamic = ["version"]
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.11", "iterpy>=1.15"]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+# A clone without tags (a fresh fork, or before the first release) would
+# otherwise fail the build outright rather than produce a placeholder version.
+fallback-version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pydantic_codegen"]
+# Tests live beside the code, so they would otherwise ship to every user.
+exclude = ["test_*.py"]
+
+[tool.semantic_release]
+tag_format = "v{version}"
+# Below 1.0.0 a breaking change is a minor bump, not a major one.
+allow_zero_version = true
+major_on_zero = false
+# The release workflow runs `uv build` itself, so that the published artifact is
+# the same one `moon run smoke` exercises.
+build = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9",
+    "pytest-xdist>=3",
+    "pytest-randomly>=4",
+    "pytest-testmon>=2",
+    "pyrefly>=1.2",
+    "tach>=0.35",
+    "ruff>=0.16",
+    "noprim>=0.1",
+    "actionlint-py>=1.7",
+    "lefthook>=2.1",
+]

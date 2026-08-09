@@ -1,0 +1,106 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+id: 'pydantic-codegen'
+language: 'python'
+stack: 'backend'
+layer: 'library'
+tags: ['python']
+
+fileGroups:
+  sources:
+    - 'src/**/*.py'
+  manifests:
+    - 'pyproject.toml'
+    - 'uv.lock'
+  workflows:
+    - '.github/workflows/*.yml'
+
+tasks:
+  test:
+    script: 'uv run pytest'
+    inputs:
+      - '@group(sources)'
+      - '@group(manifests)'
+      - 'pytest.toml'
+
+  typecheck:
+    script: 'uv run pyrefly check src'
+    inputs:
+      - '@group(sources)'
+      - '@group(manifests)'
+      - 'pyrefly.toml'
+
+  lint:
+    script: 'uv run ruff check .'
+    inputs:
+      - '@group(sources)'
+      - 'ruff.toml'
+
+  lint-fix:
+    script: 'uv run ruff check --fix .'
+    options:
+      runInCI: false
+
+  format-check:
+    script: 'uv run ruff format --check .'
+    inputs:
+      - '@group(sources)'
+      - 'ruff.toml'
+
+  format:
+    script: 'uv run ruff format .'
+    options:
+      runInCI: false
+
+  modularity:
+    script: |
+      set -euo pipefail
+      uv run tach check
+      uv run tach check-external
+      # ruff has no rule for this: PLC0414 skips __init__.py, and F401 accepts `X as X`.
+      walls="$(find src -name '__init__.py' -size +0c)"
+      test -z "$walls" || {
+        echo "__init__.py must stay empty; export lists drift:"
+        echo "$walls"
+        exit 1
+      }
+    inputs:
+      - '@group(sources)'
+      - '@group(manifests)'
+      - 'tach.toml'
+
+  noprim:
+    script: 'uv run noprim check .'
+    inputs:
+      - '@group(sources)'
+      - '@group(manifests)'
+
+  actionlint:
+    script: 'uv run actionlint'
+    inputs:
+      - '@group(workflows)'
+
+  # The dev venv has every dependency installed, so only a clean venv catches a
+  # dependency the manifest forgot to declare.
+  smoke:
+    script: |
+      set -euo pipefail
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      uv build --wheel --out-dir "$tmp/dist"
+      wheel="$(find "$tmp/dist" -name '*.whl')"
+      test -f "$wheel" || { echo "smoke: expected exactly one wheel"; exit 1; }
+      # The floor, not the dev interpreter: a 3.13-only spelling would otherwise
+      # only surface for a user, never here.
+      floor="$(sed -n 's/^requires-python = ">=\(.*\)"$/\1/p' pyproject.toml)"
+      test -n "$floor" || { echo "smoke: cannot read requires-python"; exit 1; }
+      uv venv --python "$floor" "$tmp/venv"
+      uv pip install --python "$tmp/venv" "$wheel"
+      "$tmp/venv/bin/python" -c 'from pydantic_codegen.python_source import PythonSource; PythonSource("x")'
+      if "$tmp/venv/bin/python" -c 'import pydantic_codegen.test_python_source' 2>/dev/null; then
+        echo "smoke: tests must not ship in the wheel"
+        exit 1
+      fi
+    inputs:
+      - '@group(sources)'
+      - '@group(manifests)'
