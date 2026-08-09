@@ -6,6 +6,10 @@ Everything in this repo is configured except the steps below, which need a brows
 a logged-in human. Work through them one at a time with the user, and verify each
 before moving on.
 
+Already done, no action needed: the repo is public, squash-only merges with the PR
+title as the squash subject, delete branch on merge, auto-merge enabled, and `main`
+protected behind the `checks` status check.
+
 ## 1. Register the PyPI trusted publisher
 
 Without this, `release` builds a wheel and then fails at the upload step.
@@ -24,40 +28,7 @@ Open <https://pypi.org/manage/account/publishing/> and add a **pending publisher
 Verify: `curl -s -o /dev/null -w '%{http_code}' https://pypi.org/pypi/pydantic-codegen/json`
 returns `404` until the first release lands, then `200`.
 
-## 2. Decide the repository's visibility
-
-The repo is **private** on a Free plan, which blocks two things the setup otherwise
-wants:
-
-- **Branch protection / required status checks** — cannot require `ci` to be green before merge.
-- **Auto-merge** — `allow_auto_merge` cannot be enabled, so Renovate's `platformAutomerge` will fall back to merging via the API once checks pass rather than queueing.
-
-Both work on a public repo, or on private with GitHub Pro. Ask the user which they
-want. If they make it public:
-
-```console
-gh repo edit MartinBernstorff/pydantic-codegen --visibility public --accept-visibility-change-consequences
-gh api -X PATCH repos/MartinBernstorff/pydantic-codegen -F allow_auto_merge=true
-gh api -X PUT repos/MartinBernstorff/pydantic-codegen/branches/main/protection \
-  --input - <<'JSON'
-{
-  "required_status_checks": {"strict": true, "contexts": ["checks"]},
-  "enforce_admins": false,
-  "required_pull_request_reviews": null,
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false
-}
-JSON
-```
-
-Do not change visibility without the user explicitly saying so — it is public and
-irreversible in effect.
-
-Already configured, no action needed: squash-only merges, PR title as the squash
-subject, delete branch on merge.
-
-## 3. Onboard Renovate
+## 2. Onboard Renovate
 
 The Renovate GitHub App is installed on the account, but it must also have access to
 *this* repository. Check <https://github.com/settings/installations> → Renovate →
