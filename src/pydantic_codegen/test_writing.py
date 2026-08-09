@@ -9,18 +9,11 @@ from pydantic_codegen.writing import File, generated
 
 SUBFOLDER = "pydantic_codegen.test_corpus_subfolder:Subfolder"
 
-RECIPE = """
+RECIPE = f"""
 from pydantic_codegen.loader import load
 from pydantic_codegen.writing import File, write
 
-write(
-    [
-        File(
-            "generated/subfolder.py",
-            load("pydantic_codegen.test_corpus_subfolder:Subfolder"),
-        )
-    ]
-)
+write([File("generated/subfolder.py", load("{SUBFOLDER}"))])
 """
 
 
@@ -49,14 +42,14 @@ def test_output_is_independent_of_working_directory(tmp_path: Path) -> None:
     recipe = _recipe_repo(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    generated = tmp_path / "generated" / "subfolder.py"
+    written = tmp_path / "generated" / "subfolder.py"
 
     _run(recipe, tmp_path)
-    from_root = generated.read_bytes()
-    generated.unlink()
+    from_root = written.read_bytes()
+    written.unlink()
     _run(recipe, elsewhere)
 
-    assert generated.read_bytes() == from_root
+    assert written.read_bytes() == from_root
 
 
 def test_generated_file_matches_golden(tmp_path: Path) -> None:

@@ -24,8 +24,8 @@ DEFERRED = "pydantic_codegen.test_corpus_deferred:Deferred"
 ATTRIBUTED = "pydantic_codegen.test_corpus_attributed:Attributed"
 
 
-def _source(path: Path, models: list[Model]) -> PythonSource:
-    return generated([File(str(path), models)])[0].source
+def _source(models: list[Model]) -> PythonSource:
+    return generated([File("generated.py", models)])[0].source
 
 
 def test_a_file_holding_no_models_is_an_error(tmp_path: Path) -> None:
@@ -81,14 +81,14 @@ def test_an_import_shadowed_by_a_generated_class_is_an_error(tmp_path: Path) -> 
     assert "Note.subfolder_name" in message
 
 
-def test_a_source_base_that_declares_fields_is_kept(tmp_path: Path) -> None:
-    source = _source(tmp_path / "comment.py", load(COMMENT))
+def test_a_source_base_that_declares_fields_is_kept() -> None:
+    source = _source(load(COMMENT))
 
     assert "class Comment(Identified):" in source.root
 
 
-def test_a_dotted_source_base_is_kept(tmp_path: Path) -> None:
-    source = _source(tmp_path / "attributed.py", load(ATTRIBUTED))
+def test_a_dotted_source_base_is_kept() -> None:
+    source = _source(load(ATTRIBUTED))
 
     assert "class Attributed(ident.Identified):" in source.root
 
@@ -110,14 +110,14 @@ def test_a_base_set_by_the_recipe_that_declares_fields_is_an_error(
         )
 
 
-def test_a_recipe_without_set_bases_keeps_the_source_base(tmp_path: Path) -> None:
-    source = _source(tmp_path / "subfolder.py", load(SUBFOLDER))
+def test_a_recipe_without_set_bases_keeps_the_source_base() -> None:
+    source = _source(load(SUBFOLDER))
 
     assert "class Subfolder(BaseModel):" in source.root
 
 
-def test_a_deferred_source_import_becomes_a_real_one(tmp_path: Path) -> None:
-    source = _source(tmp_path / "deferred.py", load(DEFERRED))
+def test_a_deferred_source_import_becomes_a_real_one() -> None:
+    source = _source(load(DEFERRED))
 
     assert (
         "from pydantic_codegen.test_corpus_asset_location import FolderId"
@@ -127,8 +127,8 @@ def test_a_deferred_source_import_becomes_a_real_one(tmp_path: Path) -> None:
     assert "__future__" not in source.root
 
 
-def test_two_fields_needing_one_import_dedupe(tmp_path: Path) -> None:
-    source = _source(tmp_path / "pair.py", load(PAIR))
+def test_two_fields_needing_one_import_dedupe() -> None:
+    source = _source(load(PAIR))
 
     imported = "from pydantic_codegen.test_corpus_asset_location import FolderId"
     assert source.root.count(imported) == 1

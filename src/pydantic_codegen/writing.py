@@ -64,12 +64,12 @@ def _ruff() -> RuffExecutable:
     return RuffExecutable(Path(found))
 
 
-def _format(outputs: list[GeneratedFile], ruff: RuffExecutable) -> None:
-    written = Arr(outputs).map(lambda output: str(output.path)).to_list()
+def _format(paths: list[Path], ruff: RuffExecutable) -> None:
+    written = Arr(paths).map(str).to_list()
     # ruff discovers config by walking up from its working directory, so cwd decides
     # which config the output is formatted with.
     directory = os.path.commonpath(
-        Arr(outputs).map(lambda output: str(output.path.parent)).to_list()
+        Arr(paths).map(lambda path: str(path.parent)).to_list()
     )
     _ = subprocess.run(
         [str(ruff.root), "check", "--select", "I", "--fix", *written],
@@ -102,4 +102,4 @@ def write(files: list[File]) -> None:
     for output in outputs:
         output.path.parent.mkdir(parents=True, exist_ok=True)
         _ = output.path.write_text(output.source.root)
-    _format(outputs, ruff)
+    _format(Arr(outputs).map(lambda output: output.path).to_list(), ruff)
