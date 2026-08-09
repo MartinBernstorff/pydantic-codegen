@@ -1,5 +1,6 @@
 import importlib
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +82,9 @@ def _shape(model: type[BaseModel]) -> ModelShape:
 def test_corpus_case_matches_golden(target: ModelTarget, tmp_path: Path) -> None:
     generated = _generated(target, tmp_path)
 
+    # `moon run :goldens` sets this; the regenerated files are then reviewed as a diff.
+    if os.environ.get("UPDATE_GOLDENS"):
+        _ = _golden(target).write_bytes(generated.read_bytes())
     assert generated.read_bytes() == _golden(target).read_bytes()
 
 
