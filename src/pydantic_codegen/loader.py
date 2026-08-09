@@ -6,9 +6,10 @@ import inspect
 import re
 from functools import cache, reduce
 from types import ModuleType
+from typing import TypeVar
 
 from iterpy import Arr
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, RootModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
@@ -26,18 +27,7 @@ from pydantic_codegen.ir import (
 from pydantic_codegen.python_source import PythonSource
 
 
-class ModelTarget(FrozenText):
-    def module(self) -> ModuleName:
-        written, separator, _ = self.root.partition(":")
-        if not separator:
-            raise MalformedTargetError(self)
-        return ModuleName(written)
-
-    def model(self) -> ModelName:
-        _, separator, written = self.root.partition(":")
-        if not separator:
-            raise MalformedTargetError(self)
-        return ModelName(written)
+class ModelTarget(FrozenText): ...
 
 
 class MalformedTargetError(Exception):
@@ -48,19 +38,58 @@ class MalformedTargetError(Exception):
 class UnrepresentableError(Exception): ...
 
 
+class UnboundTypeParameterError(UnrepresentableError): ...
+
+
+class UnparametrisedModelError(UnboundTypeParameterError):
+    def __init__(self, model: ModelName, parameter: SymbolName) -> None:
+        super().__init__(
+            f"{model.root} leaves the type parameter {parameter.root} unbound; "
+            f"load a parametrised alias or a concrete subclass instead"
+        )
+
+
+class TypeParameterAnnotationError(UnboundTypeParameterError):
+    def __init__(self, model: ModelName, parameter: SymbolName) -> None:
+        super().__init__(
+            f"{model.root} annotates a field with the type parameter "
+            f"{parameter.root}, which stands for no concrete type"
+        )
+
+
+class RootModelSourceError(UnrepresentableError):
+    def __init__(self, model: ModelName) -> None:
+        super().__init__(
+            f"{model.root} is a RootModel, which has a root rather than fields"
+        )
+
+
+class ValidatorError(UnrepresentableError):
+    def __init__(self, model: ModelName, validator: SymbolName) -> None:
+        super().__init__(f"{model.root} validates through {validator.root}")
+
+
+class ComputedFieldError(UnrepresentableError):
+    def __init__(self, model: ModelName, field: FieldName) -> None:
+        super().__init__(f"{model.root} computes {field.root} rather than declaring it")
+
+
 class UndeclaredFieldError(UnrepresentableError):
     def __init__(self, model: ModelName, field: FieldName) -> None:
         super().__init__(f"no class in the MRO of {model.root} declares {field.root}")
 
 
+class UndeclaredModelError(UnrepresentableError):
+    def __init__(self, module: ModuleName, model: ModelName) -> None:
+        super().__init__(
+            f"{module.root} holds no class statement for {model.root}, "
+            f"so there is no source to read its bases and fields from"
+        )
+
+
 class UnresolvableNameError(UnrepresentableError):
     def __init__(self, module: ModuleName, name: SymbolName) -> None:
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
-
-
-class UnboundTypeParameterError(UnrepresentableError):
-    def __init__(self, model: ModelName, name: SymbolName) -> None:
-        super().__init__(f"{model.root} leaves type parameter {name.root} unbound")
 
 
 class UnnameableArgumentError(UnrepresentableError):
@@ -77,15 +106,33 @@ class ParsedModule:
         self.package = ModuleName(module.__package__ or "")
         self.source = PythonSource(inspect.getsource(module))
         self.tree = ast.parse(self.source.root)
+        self.type_parameters = {
+            SymbolName(bound_name)
+            for bound_name, bound in vars(module).items()
+            if isinstance(bound, TypeVar)
+        }
 
     def segment(self, node: ast.expr) -> PythonSource:
         return PythonSource(ast.get_source_segment(self.source.root, node) or "")
 
-    def class_def(self, name: ModelName) -> ast.ClassDef:
+    def class_body(self, name: ModelName) -> list[ast.stmt]:
+        definition = self._class_def(name)
+        return definition.body if definition else []
+
+    def class_bases(self, name: ModelName) -> list[ast.expr]:
+        definition = self._class_def(name)
+        if definition is None:
+            raise UndeclaredModelError(self.name, name)
+        return definition.bases
+
+    def _class_def(self, name: ModelName) -> ast.ClassDef | None:
         return next(
-            node
-            for node in self.tree.body
-            if isinstance(node, ast.ClassDef) and node.name == name.root
+            (
+                node
+                for node in self.tree.body
+                if isinstance(node, ast.ClassDef) and node.name == name.root
+            ),
+            None,
         )
 
     def import_of(self, name: SymbolName) -> Import:
@@ -167,8 +214,8 @@ class NameSource:
         self.unbound = unbound
 
     def import_of(self, name: SymbolName) -> Import:
-        if name in self.unbound:
-            raise UnboundTypeParameterError(self.model, name)
+        if name in self.unbound or name in self.declaring.type_parameters:
+            raise TypeParameterAnnotationError(self.model, name)
         if name in self.substituted:
             return self.loaded.import_of(name)
         return self.declaring.import_of(name)
@@ -344,7 +391,7 @@ def _annotated_assign(
     assign = next(
         (
             node
-            for node in parsed.class_def(owner).body
+            for node in parsed.class_body(owner)
             if isinstance(node, ast.AnnAssign)
             and isinstance(node.target, ast.Name)
             and node.target.id == name.root
@@ -389,18 +436,21 @@ def _field(cls: type[BaseModel], name: FieldName) -> Field:
 def _model(cls: type[BaseModel]) -> Model:
     loaded = _parsed_module(inspect.getmodule(cls))
     owner = ModelName(cls.__name__)
-    bases = Arr(loaded.class_def(owner).bases)
+    # Fields before bases: an undeclared field is the more precise rejection, and
+    # reading the bases of a model with no class statement is what raises otherwise.
+    fields = (
+        Arr(list(cls.model_fields))
+        .map(lambda name: _field(cls, FieldName(name)))
+        .to_list()
+    )
+    bases = Arr(loaded.class_bases(owner))
     source = NameSource(declaring=loaded, loaded=loaded, model=owner)
     return Model(
         name=owner,
         bases=tuple(
             bases.map(lambda base: BaseName(loaded.segment(base).root)).to_list()
         ),
-        fields=tuple(
-            Arr(list(cls.model_fields))
-            .map(lambda name: _field(cls, FieldName(name)))
-            .to_list()
-        ),
+        fields=tuple(fields),
         imports=tuple(
             bases.map(lambda base: _imports_for(_plain_names(base), source))
             .flatten()
@@ -409,6 +459,32 @@ def _model(cls: type[BaseModel]) -> Model:
     )
 
 
-def load(target: ModelTarget) -> Arr[Model]:
-    module = importlib.import_module(target.module().root)
-    return Arr([_model(getattr(module, target.model().root))])
+def imported(target: ModelTarget) -> Import:
+    module_name, separator, class_name = target.root.partition(":")
+    if not separator:
+        raise MalformedTargetError(target)
+    return Import(module=ModuleName(module_name), name=SymbolName(class_name))
+
+
+def _reject_unrepresentable(cls: type[BaseModel]) -> None:
+    name = ModelName(cls.__name__)
+    parameters = cls.__pydantic_generic_metadata__["parameters"]
+    if parameters:
+        raise UnparametrisedModelError(name, SymbolName(parameters[0].__name__))
+    if issubclass(cls, RootModel):
+        raise RootModelSourceError(name)
+    decorators = cls.__pydantic_decorators__
+    validators = list(decorators.field_validators) + list(decorators.model_validators)
+    if validators:
+        raise ValidatorError(name, SymbolName(validators[0]))
+    computed = list(decorators.computed_fields)
+    if computed:
+        raise ComputedFieldError(name, FieldName(computed[0]))
+
+
+def load(target: str) -> list[Model]:
+    statement = imported(ModelTarget(target))
+    module = importlib.import_module(statement.module.root)
+    cls = getattr(module, statement.bound_name().root)
+    _reject_unrepresentable(cls)
+    return [_model(cls)]

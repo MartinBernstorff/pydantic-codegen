@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, RootModel
 
-from pydantic_codegen.loader import ModelTarget
+from pydantic_codegen.loader import ModelTarget, imported
 
 CORPUS = [
     ModelTarget("pydantic_codegen.test_corpus_constraints:Note"),
@@ -26,10 +26,10 @@ CORPUS = [
 ]
 
 RECIPE = """
-from pydantic_codegen.loader import ModelTarget, load
-from pydantic_codegen.writing import File, OutputPath, write
+from pydantic_codegen.loader import load
+from pydantic_codegen.writing import File, write
 
-write([File(OutputPath("generated/model.py"), load(ModelTarget("{target}")))])
+write([File("generated/model.py", load("{target}"))])
 """
 
 
@@ -43,18 +43,20 @@ def _generated(target: ModelTarget, root: Path) -> Path:
 
 
 def _golden(target: ModelTarget) -> Path:
-    module = target.module().root.rpartition(".")[2]
-    return Path(__file__).parent / f"{module}.{target.model().root}.golden"
+    statement = imported(target)
+    module = statement.module.root.rpartition(".")[2]
+    return Path(__file__).parent / f"{module}.{statement.bound_name().root}.golden"
 
 
 def _source_model(target: ModelTarget) -> type[BaseModel]:
-    module = importlib.import_module(target.module().root)
-    source: type[BaseModel] = getattr(module, target.model().root)
+    statement = imported(target)
+    module = importlib.import_module(statement.module.root)
+    source: type[BaseModel] = getattr(module, statement.bound_name().root)
     return source
 
 
 def _imported_model(target: ModelTarget, generated: Path) -> type[BaseModel]:
-    model = target.model().root
+    model = imported(target).bound_name().root
     name = f"generated_{model}"
     spec = importlib.util.spec_from_file_location(name, generated)
     module = importlib.util.module_from_spec(spec)  # pyrefly: ignore
@@ -62,8 +64,8 @@ def _imported_model(target: ModelTarget, generated: Path) -> type[BaseModel]:
     # registered leaves `note: "Tag | None"` an unevaluated ForwardRef.
     sys.modules[name] = module
     spec.loader.exec_module(module)  # pyrefly: ignore
-    imported: type[BaseModel] = getattr(module, model)
-    return imported
+    generated_model: type[BaseModel] = getattr(module, model)
+    return generated_model
 
 
 class ModelShape(RootModel[dict[str, str]]): ...

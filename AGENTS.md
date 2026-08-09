@@ -13,9 +13,9 @@ We use Todoist tickets to track work. All work is tagged with "@it-pydantic-code
 
 ## Python
 
-- **Never take primitives as function parameters.** Wrap them in a Pydantic `RootModel` — a `str` says nothing about what it is; `ModuleName` does. Enforced by `moon run :noprim`.
+- **Never take primitives as function parameters.** Wrap them in a Pydantic `RootModel` — a `str` says nothing about what it is; `ModuleName` does. Enforced by `moon run :noprim`. One exception: the public recipe surface (`transformers.py`, `loader.py`, `writing.py`) takes plain `str` and wraps on the first line, so a recipe reads as prose. `noprim.toml` grants it per path, and only for `str`.
 - **No `tests/` folder.** Tests live beside the code as `test_<module>.py` — a test you can see is a test you maintain.
-- **Never maintain `__all__`, and keep every `__init__.py` empty.** A wall of `from x import Y as Y` is an `__all__` in disguise: a second source of truth that drifts, and a sorted list every branch inserts into. Import from the defining module (`from pydantic_codegen.python_source import PythonSource`); `tach` is what enforces the layer boundary. `moon run :modularity` fails on a non-empty `__init__.py`.
+- **Never maintain `__all__`, and keep every `__init__.py` empty.** A wall of `from x import Y as Y` is an `__all__` in disguise: a second source of truth that drifts, and a sorted list every branch inserts into. Import from the defining module (`from pydantic_codegen.python_source import PythonSource`); `tach` is what enforces the layer boundary. `moon run :modularity` fails on a non-empty `__init__.py` — except `src/pydantic_codegen/__init__.py`, which is the public recipe surface: small, deliberately frozen, and the one list worth maintaining by hand.
 - **Prefer iterators over manual for-loops.** Use `iterpy`: `Arr([1,2,3]).map(lambda x: x+1).filter(lambda x: x>2).to_list()` — pipelines read top-to-bottom without accumulator state.
 - **Avoid constants.** Before defining one, ask whether it should be an argument from the caller — a constant is a decision frozen at the wrong layer.
 - **Default to no comments.** If code needs a comment to be understood, fix the code. When you must, one line on *why* (constraint, invariant, bug), never *what*. No docstrings.
@@ -47,7 +47,7 @@ gitignored and local; delete it to force a full run.
 
 ## Tooling
 
-- Tool settings live in each tool's own file — `ruff.toml`, `pyrefly.toml`, `tach.toml`, `pytest.toml` — **not** in `pyproject.toml`. Keeps config where the tool's docs say to look. Packaging is the exception: `[build-system]` and `[tool.hatch.build.*]` have nowhere else to live.
+- Tool settings live in each tool's own file — `ruff.toml`, `pyrefly.toml`, `tach.toml`, `pytest.toml`, `noprim.toml` — **not** in `pyproject.toml`. Keeps config where the tool's docs say to look. Packaging is the exception: `[build-system]` and `[tool.hatch.build.*]` have nowhere else to live.
 - Commits are validated automatically by lefthook pre-commit hooks (`lefthook.yml`). Install with `uv run lefthook install`; Conductor's setup script does this per clone.
 
 ## Releasing
