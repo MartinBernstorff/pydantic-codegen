@@ -17,6 +17,7 @@ from pydantic_codegen.loader import MalformedTargetError
 from pydantic_codegen.transformers import (
     AmbiguousRenameError,
     DuplicateFieldError,
+    MalformedDeclarationError,
     UnknownFieldError,
     add_field,
     each,
@@ -224,10 +225,10 @@ def test_partial_none_widens_an_annotation_whose_none_is_nested() -> None:
     )
 
 
-def test_add_field_appends_a_constant_field() -> None:
+def test_add_field_appends_a_declared_constant_field() -> None:
     [transformed] = pipe(
         [_model(FieldName("id"))],
-        add_field("kind", "Literal['subfolder']", "'subfolder'"),
+        add_field("kind: Literal['subfolder'] = 'subfolder'"),
     )
 
     assert transformed.fields[-1] == Field(
@@ -241,9 +242,7 @@ def test_add_field_resolves_its_imports_from_targets() -> None:
     [transformed] = pipe(
         [_model()],
         add_field(
-            "parent",
-            "FolderId | Literal['root']",
-            None,
+            "parent: FolderId | Literal['root']",
             "typing:Literal",
             "pydantic_codegen.test_corpus_asset_location:FolderId",
         ),
@@ -260,15 +259,34 @@ def test_add_field_resolves_its_imports_from_targets() -> None:
 
 def test_add_field_rejects_a_bare_import_symbol() -> None:
     with pytest.raises(MalformedTargetError):
-        _ = add_field("kind", "Literal['a']", "'a'", "Literal")
+        _ = add_field("kind: Literal['a'] = 'a'", "Literal")
 
 
 def test_add_field_leaves_a_field_without_a_default_required() -> None:
-    [transformed] = pipe([_model()], add_field("kind", "str", None))
+    [transformed] = pipe([_model()], add_field("kind: str"))
 
     assert transformed.fields[-1].default is None
 
 
 def test_add_field_refuses_to_add_an_already_declared_field() -> None:
     with pytest.raises(DuplicateFieldError):
-        _ = pipe([_model(FieldName("kind"))], add_field("kind", "str", None))
+        _ = pipe([_model(FieldName("kind"))], add_field("kind: str"))
+
+
+def test_add_field_splits_a_default_holding_an_equals_sign() -> None:
+    [transformed] = pipe(
+        [_model()], add_field("size: int = Field(default=1, gt=0)", "pydantic:Field")
+    )
+
+    assert transformed.fields[-1].annotation == AnnotationText("int")
+    assert transformed.fields[-1].default == DefaultText("Field(default=1, gt=0)")
+
+
+@pytest.mark.parametrize(
+    "declaration", ["kind", "kind = 'subfolder'", "kind: str = ", "a: int\nb: int"]
+)
+def test_add_field_rejects_a_declaration_that_is_not_an_annotated_name(
+    declaration: str,
+) -> None:
+    with pytest.raises(MalformedDeclarationError):
+        _ = add_field(declaration)

@@ -24,9 +24,7 @@ payload = pipe(
 create = pipe(
     payload,
     add_field(
-        "kind",
-        "Literal[SubfolderKind.SUBFOLDER]",
-        "SubfolderKind.SUBFOLDER",
+        "kind: Literal[SubfolderKind.SUBFOLDER] = SubfolderKind.SUBFOLDER",
         "typing:Literal",
         "pydantic_codegen.test_corpus_kinds:SubfolderKind",
     ),

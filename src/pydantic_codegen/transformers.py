@@ -1,3 +1,4 @@
+import ast
 import functools
 import re
 from collections.abc import Callable
@@ -9,6 +10,7 @@ from pydantic_codegen.ir import (
     DefaultText,
     Field,
     FieldName,
+    FrozenText,
     Import,
     Model,
     ModelName,
@@ -61,15 +63,42 @@ class DuplicateFieldError(Exception):
         super().__init__(f"{model.name.root} already declares {name.root}")
 
 
-# `default` is positional and required so that a lone import cannot silently bind to it.
-def add_field(
-    name: str, annotation: str, default: str | None, *imports: str
-) -> Transformer:
-    added = Field(
-        name=FieldName(name),
-        annotation=AnnotationText(annotation),
-        default=None if default is None else DefaultText(default),
-        imports=tuple(Arr(imports).map(ModelTarget).map(imported).to_list()),
+class FieldDeclaration(FrozenText): ...
+
+
+class MalformedDeclarationError(Exception):
+    def __init__(self, declaration: FieldDeclaration) -> None:
+        super().__init__(
+            f"{declaration.root} is not of the form 'name: Annotation' or "
+            f"'name: Annotation = default'"
+        )
+
+
+def _parsed(declaration: FieldDeclaration, imports: tuple[Import, ...]) -> Field:
+    # Python's own parser decides where the annotation ends, so a default holding an
+    # `=` of its own splits where a string search would not.
+    try:
+        [statement] = ast.parse(declaration.root).body
+    except (SyntaxError, ValueError) as error:
+        raise MalformedDeclarationError(declaration) from error
+    if not isinstance(statement, ast.AnnAssign) or not isinstance(
+        statement.target, ast.Name
+    ):
+        raise MalformedDeclarationError(declaration)
+    return Field(
+        name=FieldName(statement.target.id),
+        annotation=AnnotationText(ast.unparse(statement.annotation)),
+        default=None
+        if statement.value is None
+        else DefaultText(ast.unparse(statement.value)),
+        imports=imports,
+    )
+
+
+def add_field(declaration: str, *imports: str) -> Transformer:
+    added = _parsed(
+        FieldDeclaration(declaration),
+        tuple(Arr(imports).map(ModelTarget).map(imported).to_list()),
     )
 
     def appended(model: Model) -> list[Model]:
