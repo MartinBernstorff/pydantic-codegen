@@ -17,7 +17,7 @@ fallback-version = "0.0.0"
 [tool.hatch.build.targets.wheel]
 packages = ["src/pydantic_codegen"]
 # Tests live beside the code, so they would otherwise ship to every user.
-exclude = ["test_*.py"]
+exclude = ["test_*.py", "test_*.golden"]
 
 [tool.semantic_release]
 tag_format = "v{version}"
