@@ -1,5 +1,4 @@
 import inspect
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -64,30 +63,40 @@ def _ruff() -> RuffExecutable:
     return RuffExecutable(Path(found))
 
 
-def _format(paths: list[Path], ruff: RuffExecutable) -> None:
-    written = Arr(paths).map(str).to_list()
-    # ruff discovers config by walking up from its working directory, so cwd decides
-    # which config the output is formatted with.
-    directory = os.path.commonpath(
-        Arr(paths).map(lambda path: str(path.parent)).to_list()
-    )
-    _ = subprocess.run(
-        [str(ruff.root), "check", "--select", "I", "--fix", *written],
-        cwd=directory,
+def _piped(
+    ruff: RuffExecutable, arguments: list[str], path: Path, source: PythonSource
+) -> PythonSource:
+    # --stdin-filename is what ruff resolves config from, so the destination decides
+    # which config the output is formatted with, not the working directory.
+    finished = subprocess.run(
+        [str(ruff.root), *arguments, "--stdin-filename", str(path), "-"],
+        input=source.root,
+        capture_output=True,
+        text=True,
         check=True,
     )
-    _ = subprocess.run([str(ruff.root), "format", *written], cwd=directory, check=True)
+    return PythonSource(finished.stdout)
+
+
+def _formatted(path: Path, source: PythonSource, ruff: RuffExecutable) -> PythonSource:
+    # --exit-zero: a diagnostic ruff cannot fix is not this library's failure.
+    sorted_imports = _piped(
+        ruff, ["check", "--select", "I", "--fix", "--exit-zero"], path, source
+    )
+    return _piped(ruff, ["format"], path, sorted_imports)
 
 
 def generated(files: list[File]) -> list[GeneratedFile]:
     reject_duplicate_paths(Arr(files).map(lambda file: file.path).to_list())
     for file in files:
         reject_unwritable(file.path, file.models)
+    ruff = _ruff()
     return (
         Arr(files)
         .map(
             lambda file: GeneratedFile(
-                path=file.path, source=rendered(file.models, file.label())
+                path=file.path,
+                source=_formatted(file.path, rendered(file.models, file.label()), ruff),
             )
         )
         .to_list()
@@ -95,11 +104,6 @@ def generated(files: list[File]) -> list[GeneratedFile]:
 
 
 def write(files: list[File]) -> None:
-    if not files:
-        return
-    outputs = generated(files)
-    ruff = _ruff()
-    for output in outputs:
+    for output in generated(files):
         output.path.parent.mkdir(parents=True, exist_ok=True)
         _ = output.path.write_text(output.source.root)
-    _format(Arr(outputs).map(lambda output: output.path).to_list(), ruff)

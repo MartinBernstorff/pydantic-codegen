@@ -38,6 +38,12 @@ def test_generated_pairs_the_output_path_with_its_source(tmp_path: Path) -> None
     assert not destination.exists()
 
 
+def test_generated_source_is_formatted(tmp_path: Path) -> None:
+    only = generated([File(str(tmp_path / "subfolder.py"), load(SUBFOLDER))])[0]
+
+    assert "\n\n\nclass Subfolder(BaseModel):" in only.source.root
+
+
 def test_output_is_independent_of_working_directory(tmp_path: Path) -> None:
     recipe = _recipe_repo(tmp_path)
     elsewhere = tmp_path / "elsewhere"
