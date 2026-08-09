@@ -1,0 +1,10 @@
+source_roots = ["src"]
+forbid_circular_dependencies = true
+
+# pytest is a dev dependency, not a dependency of the distribution.
+[external]
+exclude = ["pytest", "pydantic_codegen"]
+
+[[modules]]
+path = "pydantic_codegen"
+depends_on = []
