@@ -3,20 +3,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pydantic_codegen.loader import load
 from pydantic_codegen.test_corpus_subfolder import Subfolder
+from pydantic_codegen.writing import File, generated
 
-RECIPE = """
+SUBFOLDER = "pydantic_codegen.test_corpus_subfolder:Subfolder"
+
+RECIPE = f"""
 from pydantic_codegen.loader import load
 from pydantic_codegen.writing import File, write
 
-write(
-    [
-        File(
-            "generated/subfolder.py",
-            load("pydantic_codegen.test_corpus_subfolder:Subfolder"),
-        )
-    ]
-)
+write([File("generated/subfolder.py", load("{SUBFOLDER}"))])
 """
 
 
@@ -31,18 +28,28 @@ def _run(recipe: Path, working_directory: Path) -> None:
     _ = subprocess.run([sys.executable, str(recipe)], cwd=working_directory, check=True)
 
 
+def test_generated_pairs_the_output_path_with_its_source(tmp_path: Path) -> None:
+    destination = tmp_path / "subfolder.py"
+
+    only = generated([File(str(destination), load(SUBFOLDER))])[0]
+
+    assert only.path == destination
+    assert "class Subfolder(BaseModel):" in only.source.root
+    assert not destination.exists()
+
+
 def test_output_is_independent_of_working_directory(tmp_path: Path) -> None:
     recipe = _recipe_repo(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    generated = tmp_path / "generated" / "subfolder.py"
+    written = tmp_path / "generated" / "subfolder.py"
 
     _run(recipe, tmp_path)
-    from_root = generated.read_bytes()
-    generated.unlink()
+    from_root = written.read_bytes()
+    written.unlink()
     _run(recipe, elsewhere)
 
-    assert generated.read_bytes() == from_root
+    assert written.read_bytes() == from_root
 
 
 def test_generated_file_matches_golden(tmp_path: Path) -> None:
