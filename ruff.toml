@@ -40,6 +40,9 @@ ignore = ["E501"]
 
 [lint.per-file-ignores]
 "**/test_*.py" = ["PLR2004"]
+# A source model the loader reads is someone else's code, and someone else's code uses
+# relative imports. This corpus module is the fixture proving the lift absolutises them.
+"**/test_corpus_inheriting.py" = ["TID252"]
 # The package root is the public recipe surface; re-exporting is the point.
 "src/pydantic_codegen/__init__.py" = ["F401"]
 

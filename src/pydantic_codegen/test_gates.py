@@ -71,22 +71,20 @@ def test_an_import_shadowed_by_a_generated_class_is_an_error(tmp_path: Path) -> 
     assert "Note.subfolder_name" in message
 
 
-def test_a_base_that_declares_fields_is_an_error(tmp_path: Path) -> None:
-    with pytest.raises(FieldCarryingBaseError) as raised:
-        write([File(str(tmp_path / "comment.py"), load(COMMENT))])
+def test_a_source_base_that_declares_fields_is_kept(tmp_path: Path) -> None:
+    generated = tmp_path / "comment.py"
 
-    message = str(raised.value)
-    assert "Identified" in message
-    assert "id" in message
+    write([File(str(generated), load(COMMENT))])
+
+    assert "class Comment(Identified):" in generated.read_text()
 
 
-def test_a_dotted_base_that_declares_fields_is_an_error(tmp_path: Path) -> None:
-    with pytest.raises(FieldCarryingBaseError) as raised:
-        write([File(str(tmp_path / "attributed.py"), load(ATTRIBUTED))])
+def test_a_dotted_source_base_is_kept(tmp_path: Path) -> None:
+    generated = tmp_path / "attributed.py"
 
-    message = str(raised.value)
-    assert "ident.Identified" in message
-    assert "id" in message
+    write([File(str(generated), load(ATTRIBUTED))])
+
+    assert "class Attributed(ident.Identified):" in generated.read_text()
 
 
 def test_a_base_set_by_the_recipe_that_declares_fields_is_an_error(

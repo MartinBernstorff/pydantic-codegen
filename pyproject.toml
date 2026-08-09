@@ -33,7 +33,6 @@ dev = [
     "pytest>=9",
     "pytest-xdist>=3",
     "pytest-randomly>=4",
-    "pytest-testmon>=2",
     "pyrefly>=1.2",
     "tach>=0.35",
     "ruff>=0.16",

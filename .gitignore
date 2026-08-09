@@ -222,7 +222,6 @@ __marimo__/
 # Project-specific
 .venv/
 .context/
-.testmondata*
 .pyrefly_cache/
 .pyrefly/
 .tach_cache/

@@ -9,3 +9,12 @@ permissive-ignores = false
 # A RootModel wrapping a primitive is meant to read as the thing it wraps, so
 # requiring bool(...) at every call site would defeat the pattern.
 implicit-bool = false
+
+# The corpus stands in for source models the loader reads, and someone else's model may
+# well pass a lambda pyrefly cannot infer a parameter type for.
+[[sub-config]]
+matches = "src/pydantic_codegen/test_corpus_bound_names.py"
+
+[sub-config.errors]
+implicit-any-lambda = false
+unknown-argument-type = false
