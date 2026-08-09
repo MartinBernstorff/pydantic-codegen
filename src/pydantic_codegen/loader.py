@@ -3,16 +3,16 @@ import builtins
 import importlib
 import importlib.util
 import inspect
-import re
-from functools import cache, reduce
+from functools import cache
 from types import ModuleType
 from typing import TypeVar
 
 from iterpy import Arr
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, RootModel
 
 from pydantic_codegen.ir import (
     AnnotationText,
+    Base,
     BaseName,
     DefaultText,
     Field,
@@ -92,12 +92,18 @@ class UnresolvableNameError(UnrepresentableError):
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
 
 
-class UnnameableArgumentError(UnrepresentableError):
-    def __init__(self, model: ModelName, name: SymbolName) -> None:
-        super().__init__(
-            f"{model.root} binds a type parameter to {name.root}, which "
-            "substitution can only write as a bare name"
-        )
+def _guards_type_checking(test: ast.expr) -> bool:
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+# A TYPE_CHECKING import is invisible at runtime, so the generated file must bind it
+# for real; the same statement, hoisted out of the guard, is what does that.
+def _deferred_imports(node: ast.stmt) -> list[ast.stmt]:
+    if not isinstance(node, ast.If):
+        return []
+    return node.body if _guards_type_checking(node.test) else []
 
 
 class ParsedModule:
@@ -160,6 +166,10 @@ class ParsedModule:
         }
         return declarations | assignments
 
+    def _statements(self) -> list[ast.stmt]:
+        deferred = Arr(self.tree.body).map(_deferred_imports).flatten().to_list()
+        return self.tree.body + deferred
+
     def _absolute(self, node: ast.ImportFrom) -> ModuleName:
         written = f"{'.' * node.level}{node.module or ''}"
         if node.level == 0:
@@ -168,7 +178,7 @@ class ParsedModule:
 
     def _imports(self) -> Arr[Import]:
         plain = (
-            Arr(self.tree.body)
+            Arr(self._statements())
             .filter(lambda node: isinstance(node, ast.Import))
             .map(lambda node: node.names)  # pyrefly: ignore
             .flatten()
@@ -180,7 +190,7 @@ class ParsedModule:
             )
         )
         from_module = (
-            Arr(self.tree.body)
+            Arr(self._statements())
             .filter(lambda node: isinstance(node, ast.ImportFrom))
             .map(
                 lambda node: [
@@ -198,26 +208,13 @@ class ParsedModule:
 
 
 class NameSource:
-    def __init__(
-        self,
-        *,
-        declaring: ParsedModule,
-        loaded: ParsedModule,
-        model: ModelName,
-        substituted: frozenset[SymbolName] = frozenset(),
-        unbound: frozenset[SymbolName] = frozenset(),
-    ) -> None:
+    def __init__(self, *, declaring: ParsedModule, model: ModelName) -> None:
         self.declaring = declaring
-        self.loaded = loaded
         self.model = model
-        self.substituted = substituted
-        self.unbound = unbound
 
     def import_of(self, name: SymbolName) -> Import:
-        if name in self.unbound or name in self.declaring.type_parameters:
+        if name in self.declaring.type_parameters:
             raise TypeParameterAnnotationError(self.model, name)
-        if name in self.substituted:
-            return self.loaded.import_of(name)
         return self.declaring.import_of(name)
 
 
@@ -289,81 +286,6 @@ def _annotation_names(node: ast.expr) -> Arr[SymbolName]:
     )
 
 
-class Substitution(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    parameter: SymbolName
-    argument: SymbolName
-
-
-def _applied(text: PythonSource, substitution: Substitution) -> PythonSource:
-    return PythonSource(
-        re.sub(
-            rf"\b{re.escape(substitution.parameter.root)}\b",
-            substitution.argument.root,
-            text.root,
-        )
-    )
-
-
-def _substituted(text: PythonSource, pairs: Arr[Substitution]) -> PythonSource:
-    return reduce(_applied, pairs.to_list(), text)
-
-
-def _models_in_mro(cls: type[BaseModel]) -> list[type[BaseModel]]:
-    return [
-        entry
-        for entry in cls.__mro__
-        if isinstance(entry, type)
-        and issubclass(entry, BaseModel)
-        # BaseModel itself declares the attribute but does not carry it.
-        and hasattr(entry, "__pydantic_generic_metadata__")
-    ]
-
-
-def _argument_name(model: ModelName, argument: type) -> SymbolName:
-    if not isinstance(argument, type):
-        raise UnnameableArgumentError(model, SymbolName(str(argument)))
-    return SymbolName(argument.__name__)
-
-
-def _parametrised(model: ModelName, entry: type[BaseModel]) -> Arr[Substitution]:
-    metadata = entry.__pydantic_generic_metadata__
-    origin = metadata["origin"]
-    if origin is None:
-        return Arr([])
-    return Arr(
-        [
-            Substitution(
-                parameter=SymbolName(parameter.__name__),
-                argument=_argument_name(model, argument),
-            )
-            for parameter, argument in zip(
-                origin.__pydantic_generic_metadata__["parameters"],
-                metadata["args"],
-                strict=False,
-            )
-        ]
-    )
-
-
-def _substitutions(cls: type[BaseModel]) -> Arr[Substitution]:
-    model = ModelName(cls.__name__)
-    return (
-        Arr(_models_in_mro(cls))
-        .map(lambda entry: _parametrised(model, entry))
-        .flatten()
-    )
-
-
-def _parameters(cls: type[BaseModel]) -> set[SymbolName]:
-    return {
-        SymbolName(parameter.__name__)
-        for entry in _models_in_mro(cls)
-        for parameter in entry.__pydantic_generic_metadata__["parameters"]
-    }
-
-
 def _declaring_class(cls: type[BaseModel], name: FieldName) -> type:
     found = next(
         (
@@ -407,21 +329,20 @@ def _imports_for(names: Arr[SymbolName], source: NameSource) -> tuple[Import, ..
     return tuple(names.map(source.import_of).to_list())
 
 
-def _field(cls: type[BaseModel], name: FieldName) -> Field:
-    declaring_class = _declaring_class(cls, name)
-    declaring = _parsed_module(inspect.getmodule(declaring_class))
-    assign = _annotated_assign(declaring, ModelName(declaring_class.__name__), name)
-    pairs = _substitutions(cls)
-    source = NameSource(
-        declaring=declaring,
-        loaded=_parsed_module(inspect.getmodule(cls)),
-        model=ModelName(cls.__name__),
-        substituted=frozenset(pairs.map(lambda pair: pair.argument).to_list()),
-        unbound=frozenset(
-            _parameters(cls) - set(pairs.map(lambda pair: pair.parameter))
-        ),
+def _own_fields(cls: type[BaseModel]) -> list[FieldName]:
+    return (
+        Arr(list(cls.model_fields))
+        .map(FieldName)
+        .filter(lambda name: _declaring_class(cls, name) is cls)
+        .to_list()
     )
-    annotation = _substituted(declaring.segment(assign.annotation), pairs)
+
+
+def _field(cls: type[BaseModel], name: FieldName) -> Field:
+    declaring = _parsed_module(inspect.getmodule(cls))
+    assign = _annotated_assign(declaring, ModelName(cls.__name__), name)
+    source = NameSource(declaring=declaring, model=ModelName(cls.__name__))
+    annotation = declaring.segment(assign.annotation)
     parsed = _parsed_expression(annotation)
     assigned = assign.value
     return Field(
@@ -433,23 +354,40 @@ def _field(cls: type[BaseModel], name: FieldName) -> Field:
     )
 
 
+def _fields_of(module: ModuleType, name: SymbolName) -> tuple[FieldName, ...]:
+    referenced = getattr(module, name.root, None)
+    if not (isinstance(referenced, type) and issubclass(referenced, BaseModel)):
+        return ()
+    return tuple(Arr(list(referenced.model_fields)).map(FieldName).to_list())
+
+
+# A base kept from the source carries no fields for the gate to see: the generated
+# model declares only what its own body declares, so nothing is declared twice.
+def _base(parsed: ParsedModule, node: ast.expr) -> Base:
+    return Base(name=BaseName(parsed.segment(node).root))
+
+
+def base_of(target: ModelTarget) -> Base:
+    statement = imported(target)
+    module = importlib.import_module(statement.module.root)
+    return Base(
+        name=BaseName(statement.bound_name().root),
+        fields=_fields_of(module, statement.bound_name()),
+    )
+
+
 def _model(cls: type[BaseModel]) -> Model:
-    loaded = _parsed_module(inspect.getmodule(cls))
+    module: ModuleType = inspect.getmodule(cls)  # pyrefly: ignore
+    loaded = _parsed_module(module)
     owner = ModelName(cls.__name__)
     # Fields before bases: an undeclared field is the more precise rejection, and
     # reading the bases of a model with no class statement is what raises otherwise.
-    fields = (
-        Arr(list(cls.model_fields))
-        .map(lambda name: _field(cls, FieldName(name)))
-        .to_list()
-    )
+    fields = Arr(_own_fields(cls)).map(lambda name: _field(cls, name)).to_list()
     bases = Arr(loaded.class_bases(owner))
-    source = NameSource(declaring=loaded, loaded=loaded, model=owner)
+    source = NameSource(declaring=loaded, model=owner)
     return Model(
         name=owner,
-        bases=tuple(
-            bases.map(lambda base: BaseName(loaded.segment(base).root)).to_list()
-        ),
+        bases=tuple(bases.map(lambda base: _base(loaded, base)).to_list()),
         fields=tuple(fields),
         imports=tuple(
             bases.map(lambda base: _imports_for(_plain_names(base), source))

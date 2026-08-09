@@ -1,6 +1,10 @@
 # pytest's tmp_path fixture is annotated Path, so a Path parameter cannot be wrapped.
 allow = ["Path"]
 
+# A private predicate returning bool says what it means; forbidding it only buys a
+# sentinel value standing in for false.
+ignore = ["NOPRIM007"]
+
 # The corpus stands in for source models written elsewhere, under someone else's rules,
 # so it is exempt: a `str` field is one of the shapes it exists to cover.
 exclude = ["src/pydantic_codegen/test_corpus_*.py"]

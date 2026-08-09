@@ -5,4 +5,4 @@ from pydantic_codegen.test_corpus_parametrised import TicketId
 
 
 class Ticket(Identified[TicketId]):
-    id: TicketId
+    pass

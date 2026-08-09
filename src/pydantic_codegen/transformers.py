@@ -6,7 +6,6 @@ from iterpy import Arr
 
 from pydantic_codegen.ir import (
     AnnotationText,
-    BaseName,
     DefaultText,
     Field,
     FieldName,
@@ -16,7 +15,7 @@ from pydantic_codegen.ir import (
     ModuleName,
     SymbolName,
 )
-from pydantic_codegen.loader import ModelTarget, imported
+from pydantic_codegen.loader import ModelTarget, base_of, imported
 
 Transformer = Callable[[list[Model]], list[Model]]
 
@@ -137,20 +136,11 @@ def partial_none() -> Transformer:
 
 
 def set_bases(*targets: str) -> Transformer:
-    statements = Arr(targets).map(ModelTarget).map(imported).to_list()
+    parsed = Arr(targets).map(ModelTarget).to_list()
+    statements = tuple(Arr(parsed).map(imported).to_list())
+    bases = tuple(Arr(parsed).map(base_of).to_list())
     return each(
-        lambda model: [
-            model.model_copy(
-                update={
-                    "bases": tuple(
-                        Arr(statements)
-                        .map(lambda statement: BaseName(statement.bound_name().root))
-                        .to_list()
-                    ),
-                    "imports": tuple(statements),
-                }
-            )
-        ]
+        lambda model: [model.model_copy(update={"bases": bases, "imports": statements})]
     )
 
 

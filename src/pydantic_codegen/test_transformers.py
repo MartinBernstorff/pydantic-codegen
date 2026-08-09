@@ -2,6 +2,7 @@ import pytest
 
 from pydantic_codegen.ir import (
     AnnotationText,
+    Base,
     BaseName,
     DefaultText,
     Field,
@@ -140,14 +141,14 @@ def test_partial_none_is_idempotent() -> None:
 def test_set_bases_replaces_the_bases_and_carries_their_import() -> None:
     [transformed] = pipe(
         [_annotated(AnnotationText("Name"))],
-        set_bases("djank.services.base:FlowbasePayloadModel"),
+        set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel"),
     )
 
-    assert transformed.bases == (BaseName("FlowbasePayloadModel"),)
+    assert transformed.bases == (Base(name=BaseName("PayloadModel")),)
     assert transformed.imports == (
         Import(
-            module=ModuleName("djank.services.base"),
-            name=SymbolName("FlowbasePayloadModel"),
+            module=ModuleName("pydantic_codegen.test_corpus_payload_base"),
+            name=SymbolName("PayloadModel"),
         ),
     )
 
@@ -155,10 +156,13 @@ def test_set_bases_replaces_the_bases_and_carries_their_import() -> None:
 def test_set_bases_takes_several_bases() -> None:
     [transformed] = pipe(
         [_annotated(AnnotationText("Name"))],
-        set_bases("djank.services.base:PayloadModel", "abc:ABC"),
+        set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel", "abc:ABC"),
     )
 
-    assert transformed.bases == (BaseName("PayloadModel"), BaseName("ABC"))
+    assert transformed.bases == (
+        Base(name=BaseName("PayloadModel")),
+        Base(name=BaseName("ABC")),
+    )
 
 
 def test_set_bases_rejects_a_bare_class_name() -> None:

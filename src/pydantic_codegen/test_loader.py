@@ -4,6 +4,7 @@ from pydantic.fields import FieldInfo
 
 from pydantic_codegen.ir import (
     AnnotationText,
+    Base,
     BaseName,
     Field,
     FieldName,
@@ -17,7 +18,6 @@ from pydantic_codegen.loader import (
     MalformedTargetError,
     ModelTarget,
     UndeclaredFieldError,
-    UnnameableArgumentError,
     UnresolvableNameError,
     load,
 )
@@ -30,7 +30,7 @@ def test_loads_fields_bases_and_imports() -> None:
     assert loaded == [
         Model(
             name=ModelName("Subfolder"),
-            bases=(BaseName("BaseModel"),),
+            bases=(Base(name=BaseName("BaseModel")),),
             fields=(
                 Field(
                     name=FieldName("name"),
@@ -126,9 +126,11 @@ def test_a_field_no_class_in_the_mro_declares_is_unrepresentable() -> None:
         _ = load("pydantic_codegen.test_loader:Injected")
 
 
-def test_a_type_parameter_bound_to_more_than_a_bare_name_is_unrepresentable() -> None:
-    with pytest.raises(UnnameableArgumentError):
-        _ = load("pydantic_codegen.test_corpus_parametrised:Listed")
+def test_a_generic_base_is_kept_verbatim_however_it_is_parametrised() -> None:
+    loaded = load("pydantic_codegen.test_corpus_parametrised:Listed")
+
+    assert loaded[0].bases == (Base(name=BaseName("Identified[list[Tag]]")),)
+    assert loaded[0].fields == ()
 
 
 def test_a_name_the_module_neither_imports_nor_defines_is_unrepresentable() -> None:
