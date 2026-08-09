@@ -3,9 +3,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from pydantic_codegen.loader import load
+from pydantic_codegen.renderer import RecipeLabel
 from pydantic_codegen.test_corpus_subfolder import Subfolder
-from pydantic_codegen.writing import File, generated
+from pydantic_codegen.writing import (
+    File,
+    RecipeFile,
+    RepoRootNotFoundError,
+    generated,
+    label_of,
+)
 
 SUBFOLDER = "pydantic_codegen.test_corpus_subfolder:Subfolder"
 
@@ -31,7 +40,9 @@ def _run(recipe: Path, working_directory: Path) -> None:
 def test_generated_pairs_the_output_path_with_its_source(tmp_path: Path) -> None:
     destination = tmp_path / "subfolder.py"
 
-    only = generated([File(str(destination), load(SUBFOLDER))])[0]
+    only = generated(
+        [File(str(destination), load(SUBFOLDER))], RecipeLabel("/codegen.py")
+    )[0]
 
     assert only.path == destination
     assert "class Subfolder(BaseModel):" in only.source.root
@@ -39,9 +50,25 @@ def test_generated_pairs_the_output_path_with_its_source(tmp_path: Path) -> None
 
 
 def test_generated_source_is_formatted(tmp_path: Path) -> None:
-    only = generated([File(str(tmp_path / "subfolder.py"), load(SUBFOLDER))])[0]
+    only = generated(
+        [File(str(tmp_path / "subfolder.py"), load(SUBFOLDER))],
+        RecipeLabel("/codegen.py"),
+    )[0]
 
     assert "\n\n\nclass Subfolder(BaseModel):" in only.source.root
+
+
+def test_the_caller_names_the_recipe_the_header_credits(tmp_path: Path) -> None:
+    file = File(str(tmp_path / "subfolder.py"), load(SUBFOLDER))
+
+    only = generated([file], RecipeLabel("/elsewhere/codegen.py"))[0]
+
+    assert "# Recipe: /elsewhere/codegen.py\n" in only.source.root
+
+
+def test_a_recipe_outside_a_repository_cannot_be_labelled(tmp_path: Path) -> None:
+    with pytest.raises(RepoRootNotFoundError, match=r"codegen\.py"):
+        _ = label_of(RecipeFile(tmp_path / "codegen.py"))
 
 
 def test_output_is_independent_of_working_directory(tmp_path: Path) -> None:

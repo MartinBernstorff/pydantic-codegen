@@ -33,20 +33,20 @@ class FormatterNotFoundError(Exception):
         super().__init__("ruff was not found on PATH")
 
 
+def label_of(recipe: RecipeFile) -> RecipeLabel:
+    root = next(
+        (parent for parent in recipe.root.parents if (parent / ".git").exists()), None
+    )
+    if root is None:
+        raise RepoRootNotFoundError(recipe)
+    return RecipeLabel(f"/{recipe.root.relative_to(root)}")
+
+
 class File:
     def __init__(self, path: str, *model_lists: list[Model]) -> None:
-        self.recipe = Path(inspect.stack()[1].filename).resolve()
-        self.path = (self.recipe.parent / OutputPath(path).root).resolve()
+        self.recipe = RecipeFile(Path(inspect.stack()[1].filename).resolve())
+        self.path = (self.recipe.root.parent / OutputPath(path).root).resolve()
         self.models = Arr(model_lists).flatten()
-
-    def label(self) -> RecipeLabel:
-        root = next(
-            (parent for parent in self.recipe.parents if (parent / ".git").exists()),
-            None,
-        )
-        if root is None:
-            raise RepoRootNotFoundError(RecipeFile(self.recipe))
-        return RecipeLabel(f"/{self.recipe.relative_to(root)}")
 
 
 class GeneratedFile(BaseModel):
@@ -86,7 +86,7 @@ def _formatted(path: Path, source: PythonSource, ruff: RuffExecutable) -> Python
     return _piped(ruff, ["format"], path, sorted_imports)
 
 
-def generated(files: list[File]) -> list[GeneratedFile]:
+def generated(files: list[File], label: RecipeLabel) -> list[GeneratedFile]:
     reject_duplicate_paths(Arr(files).map(lambda file: file.path).to_list())
     for file in files:
         reject_unwritable(file.path, file.models)
@@ -96,7 +96,7 @@ def generated(files: list[File]) -> list[GeneratedFile]:
         .map(
             lambda file: GeneratedFile(
                 path=file.path,
-                source=_formatted(file.path, rendered(file.models, file.label()), ruff),
+                source=_formatted(file.path, rendered(file.models, label), ruff),
             )
         )
         .to_list()
@@ -104,6 +104,8 @@ def generated(files: list[File]) -> list[GeneratedFile]:
 
 
 def write(files: list[File]) -> None:
-    for output in generated(files):
+    if not files:
+        return
+    for output in generated(files, label_of(files[0].recipe)):
         output.path.parent.mkdir(parents=True, exist_ok=True)
         _ = output.path.write_text(output.source.root)

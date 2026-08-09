@@ -13,9 +13,11 @@ from pydantic_codegen.gates import (
 from pydantic_codegen.ir import Model
 from pydantic_codegen.loader import load
 from pydantic_codegen.python_source import PythonSource
+from pydantic_codegen.renderer import RecipeLabel
 from pydantic_codegen.transformers import pipe, rename_model, set_bases
 from pydantic_codegen.writing import File, generated
 
+RECIPE = RecipeLabel("/codegen.py")
 SUBFOLDER = "pydantic_codegen.test_corpus_subfolder:Subfolder"
 NOTE = "pydantic_codegen.test_corpus_collision:Note"
 PAIR = "pydantic_codegen.test_corpus_pair:Pair"
@@ -25,12 +27,12 @@ ATTRIBUTED = "pydantic_codegen.test_corpus_attributed:Attributed"
 
 
 def _source(models: list[Model]) -> PythonSource:
-    return generated([File("generated.py", models)])[0].source
+    return generated([File("generated.py", models)], RECIPE)[0].source
 
 
 def test_a_file_holding_no_models_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(EmptyFileError, match=r"empty\.py"):
-        _ = generated([File(str(tmp_path / "empty.py"))])
+        _ = generated([File(str(tmp_path / "empty.py"))], RECIPE)
 
 
 def test_two_files_writing_to_one_path_is_an_error(tmp_path: Path) -> None:
@@ -39,21 +41,22 @@ def test_two_files_writing_to_one_path_is_an_error(tmp_path: Path) -> None:
             [
                 File(str(tmp_path / "clash.py"), load(SUBFOLDER)),
                 File(str(tmp_path / "clash.py"), load(SUBFOLDER)),
-            ]
+            ],
+            RECIPE,
         )
 
 
 def test_two_models_sharing_a_name_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(DuplicateModelError, match="Subfolder"):
         _ = generated(
-            [File(str(tmp_path / "twins.py"), load(SUBFOLDER), load(SUBFOLDER))]
+            [File(str(tmp_path / "twins.py"), load(SUBFOLDER), load(SUBFOLDER))], RECIPE
         )
 
 
 def test_one_name_bound_by_two_modules_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ImportCollisionError) as raised:
         _ = generated(
-            [File(str(tmp_path / "collision.py"), load(SUBFOLDER), load(NOTE))]
+            [File(str(tmp_path / "collision.py"), load(SUBFOLDER), load(NOTE))], RECIPE
         )
 
     message = str(raised.value)
@@ -73,7 +76,8 @@ def test_an_import_shadowed_by_a_generated_class_is_an_error(tmp_path: Path) -> 
                     load(NOTE),
                     pipe(load(PAIR), rename_model("SubfolderName")),
                 )
-            ]
+            ],
+            RECIPE,
         )
 
     message = str(raised.value)
@@ -106,7 +110,8 @@ def test_a_base_set_by_the_recipe_that_declares_fields_is_an_error(
                         set_bases("pydantic_codegen.test_corpus_identified:Identified"),
                     ),
                 )
-            ]
+            ],
+            RECIPE,
         )
 
 
