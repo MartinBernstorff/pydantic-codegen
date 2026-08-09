@@ -14,7 +14,6 @@ from pydantic_codegen.ir import (
 )
 from pydantic_codegen.loader import (
     MalformedTargetError,
-    ModelTarget,
     UndeclaredFieldError,
     UnresolvableNameError,
     load,
@@ -23,9 +22,9 @@ from pydantic_codegen.test_corpus_subfolder import Subfolder
 
 
 def test_loads_fields_bases_and_imports() -> None:
-    loaded = load(ModelTarget("pydantic_codegen.test_corpus_subfolder:Subfolder"))
+    loaded = load("pydantic_codegen.test_corpus_subfolder:Subfolder")
 
-    assert loaded.to_list() == [
+    assert loaded == [
         Model(
             name=ModelName("Subfolder"),
             bases=(BaseName("BaseModel"),),
@@ -77,14 +76,14 @@ class Conditionally(BaseModel):
 
 def test_a_field_the_model_does_not_declare_itself_is_unrepresentable() -> None:
     with pytest.raises(UndeclaredFieldError):
-        _ = load(ModelTarget("pydantic_codegen.test_loader:Inherited"))
+        _ = load("pydantic_codegen.test_loader:Inherited")
 
 
 def test_a_name_the_module_neither_imports_nor_defines_is_unrepresentable() -> None:
     with pytest.raises(UnresolvableNameError):
-        _ = load(ModelTarget("pydantic_codegen.test_loader:Conditionally"))
+        _ = load("pydantic_codegen.test_loader:Conditionally")
 
 
 def test_a_target_without_a_class_is_malformed() -> None:
     with pytest.raises(MalformedTargetError):
-        _ = load(ModelTarget("pydantic_codegen.test_corpus_subfolder"))
+        _ = load("pydantic_codegen.test_corpus_subfolder")

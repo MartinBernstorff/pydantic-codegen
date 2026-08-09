@@ -6,14 +6,14 @@ from pathlib import Path
 from pydantic_codegen.test_corpus_subfolder import Subfolder
 
 RECIPE = """
-from pydantic_codegen.loader import ModelTarget, load
-from pydantic_codegen.writing import File, OutputPath, write
+from pydantic_codegen.loader import load
+from pydantic_codegen.writing import File, write
 
 write(
     [
         File(
-            OutputPath("generated/subfolder.py"),
-            load(ModelTarget("pydantic_codegen.test_corpus_subfolder:Subfolder")),
+            "generated/subfolder.py",
+            load("pydantic_codegen.test_corpus_subfolder:Subfolder"),
         )
     ]
 )

@@ -180,9 +180,14 @@ def _model(cls: type[BaseModel]) -> Model:
     )
 
 
-def load(target: ModelTarget) -> Arr[Model]:
+def imported(target: ModelTarget) -> Import:
     module_name, separator, class_name = target.root.partition(":")
     if not separator:
         raise MalformedTargetError(target)
-    module = importlib.import_module(module_name)
-    return Arr([_model(getattr(module, class_name))])
+    return Import(module=ModuleName(module_name), name=SymbolName(class_name))
+
+
+def load(target: str) -> list[Model]:
+    statement = imported(ModelTarget(target))
+    module = importlib.import_module(statement.module.root)
+    return [_model(getattr(module, statement.name.root))]  # pyrefly: ignore

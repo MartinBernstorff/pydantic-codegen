@@ -61,7 +61,8 @@ tasks:
       uv run tach check
       uv run tach check-external
       # ruff has no rule for this: PLC0414 skips __init__.py, and F401 accepts `X as X`.
-      walls="$(find src -name '__init__.py' -size +0c)"
+      # The package root is the public recipe surface, deliberately frozen and small.
+      walls="$(find src -name '__init__.py' -size +0c -not -path 'src/pydantic_codegen/__init__.py')"
       test -z "$walls" || {
         echo "__init__.py must stay empty; export lists drift:"
         echo "$walls"
@@ -73,11 +74,11 @@ tasks:
       - 'tach.toml'
 
   noprim:
-    # pytest's tmp_path fixture is annotated Path, so a Path parameter cannot be wrapped.
-    script: 'uv run noprim check . --allow Path'
+    script: 'uv run noprim check .'
     inputs:
       - '@group(sources)'
       - '@group(manifests)'
+      - 'noprim.toml'
 
   actionlint:
     script: 'uv run actionlint'
@@ -100,7 +101,9 @@ tasks:
       test -n "$floor" || { echo "smoke: cannot read requires-python"; exit 1; }
       uv venv --python "$floor" "$tmp/venv"
       uv pip install --python "$tmp/venv" "$wheel"
-      "$tmp/venv/bin/python" -c 'from pydantic_codegen.python_source import PythonSource; PythonSource("x")'
+      # The whole recipe surface, so a re-export or a dependency floor that only the
+      # generated code needs still fails here.
+      "$tmp/venv/bin/python" -c 'from pydantic_codegen import File, load, omit, partial_none, partial_sentinel, pick, pipe, rename_model, set_bases, write'
       if "$tmp/venv/bin/python" -c 'import pydantic_codegen.test_python_source' 2>/dev/null; then
         echo "smoke: tests must not ship in the wheel"
         exit 1
