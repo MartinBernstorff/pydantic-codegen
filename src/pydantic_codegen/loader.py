@@ -91,12 +91,10 @@ class UnresolvableNameError(UnrepresentableError):
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
 
 
-def _guard(test: ast.expr) -> SymbolName:
+def _guards_type_checking(test: ast.expr) -> bool:
     if isinstance(test, ast.Name):
-        return SymbolName(test.id)
-    if isinstance(test, ast.Attribute):
-        return SymbolName(test.attr)
-    return SymbolName("")
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
 
 
 # A TYPE_CHECKING import is invisible at runtime, so the generated file must bind it
@@ -104,7 +102,7 @@ def _guard(test: ast.expr) -> SymbolName:
 def _deferred_imports(node: ast.stmt) -> list[ast.stmt]:
     if not isinstance(node, ast.If):
         return []
-    return node.body if _guard(node.test) == SymbolName("TYPE_CHECKING") else []
+    return node.body if _guards_type_checking(node.test) else []
 
 
 class ParsedModule:
