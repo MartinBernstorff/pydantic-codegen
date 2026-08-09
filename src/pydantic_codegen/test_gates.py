@@ -6,8 +6,8 @@ from pydantic_codegen.gates import (
     DuplicateModelError,
     DuplicatePathError,
     EmptyFileError,
-    FieldCarryingBaseError,
     ImportCollisionError,
+    RedeclaredBaseFieldError,
     ShadowedImportError,
 )
 from pydantic_codegen.ir import Model
@@ -93,21 +93,51 @@ def test_a_dotted_source_base_is_kept() -> None:
     assert "class Attributed(ident.Identified):" in source.root
 
 
-def test_a_base_set_by_the_recipe_that_declares_fields_is_an_error(
+def test_a_base_set_by_the_recipe_may_declare_fields_the_model_does_not() -> None:
+    source = _source(
+        pipe(
+            load(SUBFOLDER),
+            set_bases("pydantic_codegen.test_corpus_identified:Identified"),
+        )
+    )
+
+    assert "class Subfolder(Identified):" in source.root
+
+
+def test_a_base_set_by_the_recipe_that_the_model_redeclares_is_an_error(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(FieldCarryingBaseError, match="Identified"):
+    with pytest.raises(RedeclaredBaseFieldError, match="id"):
         _ = generated(
             [
                 File(
                     str(tmp_path / "based.py"),
                     pipe(
-                        load(SUBFOLDER),
+                        load(COMMENT),
                         set_bases("pydantic_codegen.test_corpus_identified:Identified"),
                     ),
                 )
             ]
         )
+
+
+def test_a_parametrised_base_renders_its_argument_and_imports_both() -> None:
+    source = _source(
+        pipe(
+            load(SUBFOLDER),
+            set_bases(
+                "pydantic_codegen.test_corpus_generic:Identified"
+                "[pydantic_codegen.test_corpus_asset_location:FolderId]"
+            ),
+        )
+    )
+
+    assert "class Subfolder(Identified[FolderId]):" in source.root
+    assert "from pydantic_codegen.test_corpus_generic import Identified" in source.root
+    assert (
+        "from pydantic_codegen.test_corpus_asset_location import FolderId"
+        in source.root
+    )
 
 
 def test_a_recipe_without_set_bases_keeps_the_source_base() -> None:

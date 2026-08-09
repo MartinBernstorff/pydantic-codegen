@@ -3,7 +3,7 @@ import inspect
 from types import ModuleType
 
 from iterpy import Arr
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 from pydantic_codegen.bindings import Bindings
 from pydantic_codegen.ir import (
@@ -34,7 +34,34 @@ class ModelTarget(FrozenText): ...
 
 class MalformedTargetError(Exception):
     def __init__(self, target: ModelTarget) -> None:
-        super().__init__(f"{target.root} is not of the form 'module:Class'")
+        super().__init__(
+            f"{target.root} is not of the form 'module:Class' or "
+            f"'module:Class[module:Argument, ...]'"
+        )
+
+
+class _Parsed(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    origin: Import
+    arguments: tuple["_Parsed", ...] = ()
+
+    def written(self) -> BaseName:
+        if not self.arguments:
+            return BaseName(self.origin.bound_name().root)
+        inside = ", ".join(
+            Arr(self.arguments).map(lambda argument: argument.written().root).to_list()
+        )
+        return BaseName(f"{self.origin.bound_name().root}[{inside}]")
+
+    def statements(self) -> tuple[Import, ...]:
+        return (
+            self.origin,
+            *Arr(self.arguments)
+            .map(lambda argument: argument.statements())
+            .flatten()
+            .to_list(),
+        )
 
 
 def _declaring_class(cls: type[BaseModel], name: FieldName) -> type:
@@ -91,12 +118,16 @@ def _fields_of(module: ModuleType, name: SymbolName) -> tuple[FieldName, ...]:
 
 
 def base_of(target: ModelTarget) -> Base:
-    statement = imported(target)
-    module = importlib.import_module(statement.module.root)
+    parsed = _parsed(target)
+    module = importlib.import_module(parsed.origin.module.root)
     return Base(
-        name=BaseName(statement.bound_name().root),
-        fields=_fields_of(module, statement.bound_name()),
+        name=parsed.written(),
+        fields=_fields_of(module, parsed.origin.bound_name()),
     )
+
+
+def imports_of(target: ModelTarget) -> tuple[Import, ...]:
+    return _parsed(target).statements()
 
 
 def _model(cls: type[BaseModel]) -> Model:
@@ -120,9 +151,35 @@ def _model(cls: type[BaseModel]) -> Model:
 
 def imported(target: ModelTarget) -> Import:
     module_name, separator, class_name = target.root.partition(":")
-    if not separator:
+    if not separator or not class_name.isidentifier():
         raise MalformedTargetError(target)
     return Import(module=ModuleName(module_name), name=SymbolName(class_name))
+
+
+def _terms(inside: str) -> list[str]:
+    terms = [""]
+    depth = 0
+    for character in inside:
+        if character == "," and depth == 0:
+            terms.append("")
+            continue
+        depth += {"[": 1, "]": -1}.get(character, 0)
+        terms[-1] += character
+    return [term.strip() for term in terms]
+
+
+def _parsed(target: ModelTarget) -> _Parsed:
+    head, bracket, inside = target.root.partition("[")
+    if not bracket:
+        return _Parsed(origin=imported(target))
+    if not inside.endswith("]"):
+        raise MalformedTargetError(target)
+    return _Parsed(
+        origin=imported(ModelTarget(head)),
+        arguments=tuple(
+            Arr(_terms(inside[:-1])).map(ModelTarget).map(_parsed).to_list()
+        ),
+    )
 
 
 def _reject_unrepresentable(cls: type[BaseModel]) -> None:

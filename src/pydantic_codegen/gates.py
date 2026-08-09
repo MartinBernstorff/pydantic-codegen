@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from pydantic_codegen.ir import (
     Base,
+    FieldName,
     FrozenText,
     Import,
     Model,
@@ -57,13 +58,12 @@ class ShadowedImportError(Exception):
         )
 
 
-class FieldCarryingBaseError(Exception):
-    def __init__(self, model: ModelName, base: Base) -> None:
-        declared = ", ".join(field.root for field in base.fields)
+class RedeclaredBaseFieldError(Exception):
+    def __init__(self, model: ModelName, base: Base, field: FieldName) -> None:
         super().__init__(
-            f"{model.root} inherits {base.name.root}, which declares {declared}; "
-            f"a base that carries fields declares them a second time, so omitting "
-            f"one of them leaves the generated model still accepting it"
+            f"{model.root} declares {field.root}, which its base {base.name.root} "
+            f"already declares; the generated declaration silently overrides the "
+            f"base's, so omit {field.root} or drop the base"
         )
 
 
@@ -133,16 +133,19 @@ def _reject_shadowed_imports(
         raise ShadowedImportError(shadowed[0])
 
 
-def _reject_field_carrying_bases(models: list[Model]) -> None:
-    carrying = (
-        Arr(models)
-        .map(lambda model: [(model.name, base) for base in model.bases if base.fields])
-        .flatten()
-        .to_list()
-    )
-    if carrying:
-        owner, base = carrying[0]
-        raise FieldCarryingBaseError(owner, base)
+def _reject_redeclared_base_fields(models: list[Model]) -> None:
+    def of_model(model: Model) -> list[tuple[ModelName, Base, FieldName]]:
+        declared = {field.name for field in model.fields}
+        return [
+            (model.name, base, name)
+            for base in model.bases
+            for name in base.fields
+            if name in declared
+        ]
+
+    redeclared = Arr(models).map(of_model).flatten().to_list()
+    if redeclared:
+        raise RedeclaredBaseFieldError(*redeclared[0])
 
 
 def reject_unwritable(path: Path, models: Arr[Model]) -> None:
@@ -150,7 +153,7 @@ def reject_unwritable(path: Path, models: Arr[Model]) -> None:
     if not declared:
         raise EmptyFileError(path)
     _reject_duplicate_models(declared)
-    _reject_field_carrying_bases(declared)
+    _reject_redeclared_base_fields(declared)
     requirements = _requirements(declared)
     _reject_import_collisions(requirements)
     _reject_shadowed_imports(requirements, declared)

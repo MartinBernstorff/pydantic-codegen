@@ -165,11 +165,41 @@ def test_set_bases_takes_several_bases() -> None:
     )
 
 
-def test_set_bases_rejects_a_bare_class_name() -> None:
+def test_set_bases_parametrises_a_generic_base_and_imports_every_symbol() -> None:
+    [transformed] = pipe(
+        [_annotated(AnnotationText("Name"))],
+        set_bases(
+            "pydantic_codegen.test_corpus_generic:Identified"
+            "[pydantic_codegen.test_corpus_asset_location:FolderId]"
+        ),
+    )
+
+    assert transformed.bases == (
+        Base(name=BaseName("Identified[FolderId]"), fields=(FieldName("id"),)),
+    )
+    assert transformed.imports == (
+        Import(
+            module=ModuleName("pydantic_codegen.test_corpus_generic"),
+            name=SymbolName("Identified"),
+        ),
+        Import(
+            module=ModuleName("pydantic_codegen.test_corpus_asset_location"),
+            name=SymbolName("FolderId"),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "FlowbasePayloadModel",
+        "pydantic_codegen.test_corpus_generic:Identified[abc:ABC",
+        "pydantic_codegen.test_corpus_generic:Identified[FolderId]",
+    ],
+)
+def test_set_bases_rejects_a_target_that_is_not_module_qualified(target: str) -> None:
     with pytest.raises(MalformedTargetError):
-        _ = pipe(
-            [_annotated(AnnotationText("Name"))], set_bases("FlowbasePayloadModel")
-        )
+        _ = pipe([_annotated(AnnotationText("Name"))], set_bases(target))
 
 
 def test_rename_model_applies_a_callable_to_every_model() -> None:
