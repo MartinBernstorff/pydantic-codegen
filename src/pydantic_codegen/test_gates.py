@@ -19,6 +19,7 @@ NOTE = "pydantic_codegen.test_corpus_collision:Note"
 PAIR = "pydantic_codegen.test_corpus_pair:Pair"
 COMMENT = "pydantic_codegen.test_corpus_identified:Comment"
 DEFERRED = "pydantic_codegen.test_corpus_deferred:Deferred"
+ATTRIBUTED = "pydantic_codegen.test_corpus_attributed:Attributed"
 
 
 def test_a_file_holding_no_models_is_an_error(tmp_path: Path) -> None:
@@ -76,6 +77,15 @@ def test_a_base_that_declares_fields_is_an_error(tmp_path: Path) -> None:
 
     message = str(raised.value)
     assert "Identified" in message
+    assert "id" in message
+
+
+def test_a_dotted_base_that_declares_fields_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(FieldCarryingBaseError) as raised:
+        write([File(str(tmp_path / "attributed.py"), load(ATTRIBUTED))])
+
+    message = str(raised.value)
+    assert "ident.Identified" in message
     assert "id" in message
 
 

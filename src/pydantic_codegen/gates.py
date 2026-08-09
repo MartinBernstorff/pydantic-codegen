@@ -67,20 +67,20 @@ class FieldCarryingBaseError(Exception):
         )
 
 
+def _first_repeat[T](keys: list[T]) -> T | None:
+    return next((key for index, key in enumerate(keys) if key in keys[:index]), None)
+
+
 def reject_duplicate_paths(paths: list[Path]) -> None:
-    seen: set[Path] = set()
-    for path in paths:
-        if path in seen:
-            raise DuplicatePathError(path)
-        seen.add(path)
+    repeated = _first_repeat(paths)
+    if repeated is not None:
+        raise DuplicatePathError(repeated)
 
 
 def _reject_duplicate_models(models: list[Model]) -> None:
-    seen: set[ModelName] = set()
-    for model in models:
-        if model.name in seen:
-            raise DuplicateModelError(model.name)
-        seen.add(model.name)
+    repeated = _first_repeat(Arr(models).map(lambda model: model.name).to_list())
+    if repeated is not None:
+        raise DuplicateModelError(repeated)
 
 
 def _requirements(models: list[Model]) -> list[Requirement]:
@@ -141,7 +141,8 @@ def _reject_field_carrying_bases(models: list[Model]) -> None:
         .to_list()
     )
     if carrying:
-        raise FieldCarryingBaseError(*carrying[0])
+        owner, base = carrying[0]
+        raise FieldCarryingBaseError(owner, base)
 
 
 def reject_unwritable(path: Path, models: Arr[Model]) -> None:

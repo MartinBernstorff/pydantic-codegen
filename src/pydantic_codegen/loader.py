@@ -91,6 +91,22 @@ class UnresolvableNameError(UnrepresentableError):
         super().__init__(f"{module.root} neither imports nor defines {name.root}")
 
 
+def _guard(test: ast.expr) -> SymbolName:
+    if isinstance(test, ast.Name):
+        return SymbolName(test.id)
+    if isinstance(test, ast.Attribute):
+        return SymbolName(test.attr)
+    return SymbolName("")
+
+
+# A TYPE_CHECKING import is invisible at runtime, so the generated file must bind it
+# for real; the same statement, hoisted out of the guard, is what does that.
+def _deferred_imports(node: ast.stmt) -> list[ast.stmt]:
+    if not isinstance(node, ast.If):
+        return []
+    return node.body if _guard(node.test) == SymbolName("TYPE_CHECKING") else []
+
+
 class ParsedModule:
     def __init__(self, module: ModuleType) -> None:
         self.name = ModuleName(module.__name__)
@@ -150,16 +166,9 @@ class ParsedModule:
         }
         return declarations | assignments
 
-    # A TYPE_CHECKING import is invisible at runtime, so the generated file must bind
-    # it for real; the same statement, hoisted, is what does that.
     def _statements(self) -> list[ast.stmt]:
-        guarded = [
-            inner
-            for node in self.tree.body
-            if isinstance(node, ast.If)
-            for inner in node.body + node.orelse
-        ]
-        return self.tree.body + guarded
+        deferred = Arr(self.tree.body).map(_deferred_imports).flatten().to_list()
+        return self.tree.body + deferred
 
     def _imports(self) -> Arr[Import]:
         plain = (
@@ -244,8 +253,10 @@ def _field(parsed: ParsedModule, owner: ModelName, name: FieldName) -> Field:
     )
 
 
-def _fields_of(module: ModuleType, name: SymbolName) -> tuple[FieldName, ...]:
-    referenced = getattr(module, name.root, None)
+def _fields_of(module: ModuleType, path: SymbolName) -> tuple[FieldName, ...]:
+    referenced: object = module
+    for step in path.root.split("."):
+        referenced = getattr(referenced, step, None)
     if not (isinstance(referenced, type) and issubclass(referenced, BaseModel)):
         return ()
     return tuple(Arr(list(referenced.model_fields)).map(FieldName).to_list())
@@ -255,9 +266,7 @@ def _base(parsed: ParsedModule, module: ModuleType, node: ast.expr) -> Base:
     root = node.value if isinstance(node, ast.Subscript) else node
     return Base(
         name=BaseName(parsed.segment(node).root),
-        fields=_fields_of(module, SymbolName(root.id))
-        if isinstance(root, ast.Name)
-        else (),
+        fields=_fields_of(module, SymbolName(parsed.segment(root).root)),
     )
 
 
