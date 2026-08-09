@@ -257,6 +257,13 @@ def _model(cls: type[BaseModel]) -> Model:
     )
 
 
+def imported(target: ModelTarget) -> Import:
+    module_name, separator, class_name = target.root.partition(":")
+    if not separator:
+        raise MalformedTargetError(target)
+    return Import(module=ModuleName(module_name), name=SymbolName(class_name))
+
+
 def _reject_unrepresentable(cls: type[BaseModel]) -> None:
     name = ModelName(cls.__name__)
     parameters = cls.__pydantic_generic_metadata__["parameters"]
@@ -273,11 +280,9 @@ def _reject_unrepresentable(cls: type[BaseModel]) -> None:
         raise ComputedFieldError(name, FieldName(computed[0]))
 
 
-def load(target: ModelTarget) -> Arr[Model]:
-    module_name, separator, class_name = target.root.partition(":")
-    if not separator:
-        raise MalformedTargetError(target)
-    module = importlib.import_module(module_name)
-    cls = getattr(module, class_name)
+def load(target: str) -> list[Model]:
+    statement = imported(ModelTarget(target))
+    module = importlib.import_module(statement.module.root)
+    cls = getattr(module, statement.bound_name().root)
     _reject_unrepresentable(cls)
-    return Arr([_model(cls)])
+    return [_model(cls)]

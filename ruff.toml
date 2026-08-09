@@ -40,6 +40,8 @@ ignore = ["E501"]
 
 [lint.per-file-ignores]
 "**/test_*.py" = ["PLR2004"]
+# The package root is the public recipe surface; re-exporting is the point.
+"src/pydantic_codegen/__init__.py" = ["F401"]
 
 [lint.isort]
 known-first-party = ["pydantic_codegen"]

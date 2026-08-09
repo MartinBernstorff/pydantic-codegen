@@ -33,9 +33,9 @@ class FormatterNotFoundError(Exception):
 
 
 class File:
-    def __init__(self, path: OutputPath, *model_lists: Arr[Model]) -> None:
+    def __init__(self, path: str, *model_lists: list[Model]) -> None:
         self.recipe = Path(inspect.stack()[1].filename).resolve()
-        self.path = (self.recipe.parent / path.root).resolve()
+        self.path = (self.recipe.parent / OutputPath(path).root).resolve()
         self.models = Arr(model_lists).flatten()
 
     def label(self) -> RecipeLabel:

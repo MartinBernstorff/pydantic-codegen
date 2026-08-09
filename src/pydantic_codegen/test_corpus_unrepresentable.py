@@ -10,10 +10,9 @@ from pydantic import (
     model_validator,
 )
 
-from pydantic_codegen.ir import SymbolName
+from pydantic_codegen.ir import Model, SymbolName
 from pydantic_codegen.loader import (
     ComputedFieldError,
-    ModelTarget,
     RootModelSourceError,
     TypeParameterAnnotationError,
     UnboundTypeParameterError,
@@ -24,8 +23,8 @@ from pydantic_codegen.loader import (
 )
 
 
-def target(model: SymbolName) -> ModelTarget:
-    return ModelTarget(f"pydantic_codegen.test_corpus_unrepresentable:{model.root}")
+def _loaded(model: SymbolName) -> list[Model]:
+    return load(f"pydantic_codegen.test_corpus_unrepresentable:{model.root}")
 
 
 class UnparametrisedGeneric[Id](BaseModel):
@@ -34,7 +33,7 @@ class UnparametrisedGeneric[Id](BaseModel):
 
 def test_an_unbound_type_parameter_is_unrepresentable() -> None:
     with pytest.raises(UnboundTypeParameterError) as rejection:
-        _ = load(target(SymbolName("UnparametrisedGeneric")))
+        _ = _loaded(SymbolName("UnparametrisedGeneric"))
 
     message = str(rejection.value)
     assert "UnparametrisedGeneric" in message
@@ -48,7 +47,7 @@ class Name(RootModel[str]): ...
 
 def test_a_root_model_is_unrepresentable_as_a_load_target() -> None:
     with pytest.raises(RootModelSourceError):
-        _ = load(target(SymbolName("Name")))
+        _ = _loaded(SymbolName("Name"))
 
 
 class FieldValidated(BaseModel):
@@ -81,7 +80,7 @@ class InheritsAValidator(FieldValidated): ...
 )
 def test_a_validator_is_unrepresentable(model: SymbolName) -> None:
     with pytest.raises(ValidatorError):
-        _ = load(target(model))
+        _ = _loaded(model)
 
 
 class HasAComputedField(BaseModel):
@@ -95,7 +94,7 @@ class HasAComputedField(BaseModel):
 
 def test_a_computed_field_is_unrepresentable() -> None:
     with pytest.raises(ComputedFieldError):
-        _ = load(target(SymbolName("HasAComputedField")))
+        _ = _loaded(SymbolName("HasAComputedField"))
 
 
 Fabricated = create_model("Fabricated", name=(Name, ...))
@@ -103,7 +102,7 @@ Fabricated = create_model("Fabricated", name=(Name, ...))
 
 def test_a_model_without_a_class_statement_is_unrepresentable() -> None:
     with pytest.raises(UndeclaredFieldError):
-        _ = load(target(SymbolName("Fabricated")))
+        _ = _loaded(SymbolName("Fabricated"))
 
 
 FabricatedWithoutFields = create_model("FabricatedWithoutFields")
@@ -111,7 +110,7 @@ FabricatedWithoutFields = create_model("FabricatedWithoutFields")
 
 def test_a_fieldless_model_without_a_class_statement_is_unrepresentable() -> None:
     with pytest.raises(UndeclaredModelError):
-        _ = load(target(SymbolName("FabricatedWithoutFields")))
+        _ = _loaded(SymbolName("FabricatedWithoutFields"))
 
 
 class BrandedAndValidated(RootModel[str]):
@@ -123,7 +122,7 @@ class BrandedAndValidated(RootModel[str]):
 
 def test_a_root_model_is_rejected_before_its_validator() -> None:
     with pytest.raises(RootModelSourceError):
-        _ = load(target(SymbolName("BrandedAndValidated")))
+        _ = _loaded(SymbolName("BrandedAndValidated"))
 
 
 Id = TypeVar("Id")
@@ -136,7 +135,7 @@ class AnnotatedWithATypeParameter(BaseModel):
 
 def test_a_field_annotated_with_a_type_parameter_is_unrepresentable() -> None:
     with pytest.raises(TypeParameterAnnotationError) as rejection:
-        _ = load(target(SymbolName("AnnotatedWithATypeParameter")))
+        _ = _loaded(SymbolName("AnnotatedWithATypeParameter"))
 
     message = str(rejection.value)
     assert "AnnotatedWithATypeParameter" in message
