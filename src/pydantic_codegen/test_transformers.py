@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from pydantic_codegen.ir import (
@@ -14,6 +16,8 @@ from pydantic_codegen.ir import (
     SymbolName,
 )
 from pydantic_codegen.loader import MalformedTargetError
+from pydantic_codegen.python_source import PythonSource
+from pydantic_codegen.test_corpus_builder import SourceModule, corpus
 from pydantic_codegen.transformers import (
     AmbiguousRenameError,
     UnknownFieldError,
@@ -138,26 +142,38 @@ def test_partial_none_is_idempotent() -> None:
     assert pipe(once, partial_none()) == once
 
 
-def test_set_bases_replaces_the_bases_and_carries_their_import() -> None:
-    [transformed] = pipe(
-        [_annotated(AnnotationText("Name"))],
-        set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel"),
-    )
+PAYLOAD_BASE = SourceModule(
+    name=ModuleName("payload_base"),
+    source=PythonSource("""
+from pydantic import BaseModel
+
+
+class PayloadModel(BaseModel): ...
+"""),
+)
+
+
+def test_set_bases_replaces_the_bases_and_carries_their_import(
+    tmp_path: Path,
+) -> None:
+    with corpus(tmp_path, [PAYLOAD_BASE]):
+        [transformed] = pipe(
+            [_annotated(AnnotationText("Name"))],
+            set_bases("payload_base:PayloadModel"),
+        )
 
     assert transformed.bases == (Base(name=BaseName("PayloadModel")),)
     assert transformed.imports == (
-        Import(
-            module=ModuleName("pydantic_codegen.test_corpus_payload_base"),
-            name=SymbolName("PayloadModel"),
-        ),
+        Import(module=ModuleName("payload_base"), name=SymbolName("PayloadModel")),
     )
 
 
-def test_set_bases_takes_several_bases() -> None:
-    [transformed] = pipe(
-        [_annotated(AnnotationText("Name"))],
-        set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel", "abc:ABC"),
-    )
+def test_set_bases_takes_several_bases(tmp_path: Path) -> None:
+    with corpus(tmp_path, [PAYLOAD_BASE]):
+        [transformed] = pipe(
+            [_annotated(AnnotationText("Name"))],
+            set_bases("payload_base:PayloadModel", "abc:ABC"),
+        )
 
     assert transformed.bases == (
         Base(name=BaseName("PayloadModel")),

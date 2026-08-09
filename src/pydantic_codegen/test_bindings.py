@@ -25,10 +25,10 @@ from typing import TYPE_CHECKING
 from decimal import Decimal as Money
 from pydantic import BaseModel, Field
 
-from .test_corpus_stamping import Stamped
+from .stamping import Stamped
 
 if TYPE_CHECKING:
-    from pydantic_codegen.test_corpus_tagging import Tag
+    from pydantic_codegen.tagging import Tag
 
 
 class Local(BaseModel): ...
@@ -58,9 +58,7 @@ def _own(name: SymbolName) -> Import:
 
 
 FIELD = Import(module=ModuleName("pydantic"), name=SymbolName("Field"))
-TAG = Import(
-    module=ModuleName("pydantic_codegen.test_corpus_tagging"), name=SymbolName("Tag")
-)
+TAG = Import(module=ModuleName("pydantic_codegen.tagging"), name=SymbolName("Tag"))
 
 
 @pytest.mark.parametrize(
@@ -99,7 +97,7 @@ TAG = Import(
             BaseName("Stamped"),
             {
                 Import(
-                    module=ModuleName("pydantic_codegen.test_corpus_stamping"),
+                    module=ModuleName("pydantic_codegen.stamping"),
                     name=SymbolName("Stamped"),
                 )
             },

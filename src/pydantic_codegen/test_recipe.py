@@ -1,7 +1,13 @@
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
+
+from pydantic import BaseModel
+
+from pydantic_codegen.ir import ModuleName, SymbolName
+from pydantic_codegen.python_source import PythonSource
+from pydantic_codegen.test_corpus_builder import SourceModule, corpus, executed
 
 RECIPE = """
 from pydantic_codegen import (
@@ -15,48 +21,86 @@ from pydantic_codegen import (
     write,
 )
 
-payload = pipe(
-    load("pydantic_codegen.test_corpus_subfolder:Subfolder"),
-    omit("parent_folder_id"),
-)
+payload = pipe(load("subfolder:Subfolder"), omit("parent_folder_id"))
 
 create = pipe(
     payload,
-    set_bases("pydantic_codegen.test_corpus_payload_base:PayloadModel"),
+    set_bases("payload_base:PayloadModel"),
     rename_model(lambda name: f"Create{name}Payload"),
 )
 
 update = pipe(
     payload,
     partial_sentinel(),
-    set_bases("pydantic_codegen.test_corpus_payload_base:PatchPayloadModel"),
+    set_bases("payload_base:PatchPayloadModel"),
     rename_model(lambda name: f"Update{name}Payload"),
 )
 
 write([File("generated/payloads.py", create, update)])
 """
 
-
-def _generated(root: Path) -> Path:
-    (root / ".git").mkdir()
-    recipe = root / "codegen.py"
-    _ = recipe.write_text(RECIPE)
-    _ = subprocess.run([sys.executable, str(recipe)], cwd=root, check=True)
-    return root / "generated" / "payloads.py"
+SUBFOLDER = SourceModule(
+    name=ModuleName("subfolder"),
+    source=PythonSource("""
+from pydantic import BaseModel, RootModel
 
 
-def test_the_recipe_surface_generates_the_payload_pair(tmp_path: Path) -> None:
-    generated = _generated(tmp_path)
-
-    golden = Path(__file__).parent / "test_corpus_payloads.golden"
-    assert generated.read_text() == golden.read_text()
+class SubfolderName(RootModel[str]): ...
 
 
-def test_the_generated_patch_payload_omits_an_unset_field(tmp_path: Path) -> None:
-    generated = _generated(tmp_path)
+class FolderId(RootModel[str]): ...
 
-    spec = importlib.util.spec_from_file_location("generated_payloads", generated)
-    module = importlib.util.module_from_spec(spec)  # pyrefly: ignore
-    spec.loader.exec_module(module)  # pyrefly: ignore
 
-    assert module.UpdateSubfolderPayload().model_dump() == {}
+class Subfolder(BaseModel):
+    name: SubfolderName
+    parent_folder_id: FolderId
+"""),
+)
+
+PAYLOAD_BASE = SourceModule(
+    name=ModuleName("payload_base"),
+    source=PythonSource("""
+from pydantic import BaseModel
+
+
+class PayloadModel(BaseModel): ...
+
+
+class PatchPayloadModel(BaseModel): ...
+"""),
+)
+
+
+def _model(module: ModuleType, name: SymbolName) -> type[BaseModel]:
+    generated: type[BaseModel] = getattr(module, name.root)
+    return generated
+
+
+# Run from a working directory that is not the recipe's own, so the output path is
+# proven to follow the recipe file rather than wherever it was invoked from.
+def test_a_recipe_writes_payloads_that_behave_like_the_source(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    _ = (tmp_path / "codegen.py").write_text(RECIPE)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    with corpus(tmp_path, [SUBFOLDER, PAYLOAD_BASE]):
+        _ = subprocess.run(
+            [sys.executable, str(tmp_path / "codegen.py")],
+            cwd=elsewhere,
+            env={
+                "PATH": str(Path(sys.executable).parent),
+                "PYTHONPATH": str(tmp_path),
+            },
+            check=True,
+        )
+        payloads = PythonSource((tmp_path / "generated" / "payloads.py").read_text())
+
+        with executed(payloads, ModuleName("generated_payloads")) as written:
+            assert set(
+                _model(written, SymbolName("CreateSubfolderPayload")).model_fields
+            ) == {"name"}
+            assert (
+                _model(written, SymbolName("UpdateSubfolderPayload"))().model_dump()
+                == {}
+            )

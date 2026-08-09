@@ -5,10 +5,6 @@ allow = ["Path"]
 # sentinel value standing in for false.
 ignore = ["NOPRIM007"]
 
-# The corpus stands in for source models written elsewhere, under someone else's rules,
-# so it is exempt: a `str` field is one of the shapes it exists to cover.
-exclude = ["src/pydantic_codegen/test_corpus_*.py"]
-
 # The recipe surface takes plain str so a recipe reads as prose; each entry point
 # wraps its argument on the first line.
 [[per_path]]
