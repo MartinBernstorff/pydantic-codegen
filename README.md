@@ -1,5 +1,7 @@
 # pydantic-codegen
 
+_Updated 2026-08-28_
+
 ```console
 $ pip install pydantic-codegen
 ```
